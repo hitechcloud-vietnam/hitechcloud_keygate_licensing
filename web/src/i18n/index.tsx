@@ -16,7 +16,7 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | null>(null)
 
-const STORAGE_KEY = "keygate_locale"
+const STORAGE_KEY = "hitechcloud_locale"
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(() => {

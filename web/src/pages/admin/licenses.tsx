@@ -1246,7 +1246,7 @@ function UsageTab({ licenseId }: { licenseId: string }) {
 
 // SeatsTab is READ-ONLY by design.
 //
-// Keygate's bundled UI doesn't expose seat / team management on
+// HiTechCloud's bundled UI doesn't expose seat / team management on
 // purpose: the platform's job is license-key issuance, not team
 // management. The seats data model + API endpoints exist for
 // merchant integrations that want to wire team UX into their own

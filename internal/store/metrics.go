@@ -16,7 +16,7 @@ import (
 // Alert when this counter increments. Phase C deployment is unsafe while
 // any failures are recorded.
 var LicenseKeyDecryptFailures = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "keygate_license_key_decrypt_failures_total",
+	Name: "hitechcloud_license_key_decrypt_failures_total",
 	Help: "Cumulative count of license_key_encrypted decrypt failures.",
 })
 
@@ -28,7 +28,7 @@ var LicenseKeyDecryptFailures = promauto.NewCounter(prometheus.CounterOpts{
 // Updated on each backfill batch + once at startup; used as the deciding
 // metric for "is it safe to enable Phase B?".
 var LicenseKeysUnencrypted = promauto.NewGauge(prometheus.GaugeOpts{
-	Name: "keygate_license_keys_unencrypted",
+	Name: "hitechcloud_license_keys_unencrypted",
 	Help: "Number of license rows still requiring license_key_encrypted backfill.",
 })
 

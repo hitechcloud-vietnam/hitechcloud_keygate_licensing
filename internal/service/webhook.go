@@ -476,7 +476,7 @@ func (s *WebhookService) DeliverTest(ctx context.Context, wh *model.Webhook) (*m
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"data": map[string]any{
 				"webhook_id": wh.ID,
-				"message":    "This is a test delivery from Keygate.",
+				"message":    "This is a test delivery from HiTechCloud.",
 			},
 		},
 	}
@@ -506,9 +506,9 @@ func (s *WebhookService) deliver(ctx context.Context, wh *model.Webhook, deliver
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Keygate-Event", delivery.Event)
-	req.Header.Set("X-Keygate-Signature", "sha256="+sig)
-	req.Header.Set("X-Keygate-Delivery", delivery.ID)
+	req.Header.Set("X-HiTechCloud-Event", delivery.Event)
+	req.Header.Set("X-HiTechCloud-Signature", "sha256="+sig)
+	req.Header.Set("X-HiTechCloud-Delivery", delivery.ID)
 
 	resp, err := s.send(ctx, req)
 	if err != nil {
@@ -567,7 +567,7 @@ var ErrWebhookInactive = errors.New("webhook is disabled")
 // Redispatch fires a fresh delivery using the payload of an existing
 // one. Industry-standard "resend" behaviour: the receiver sees the
 // SAME `data` (so its idempotency dedup still works) but a new
-// `X-Keygate-Delivery` header and a new row in the deliveries table
+// `X-HiTechCloud-Delivery` header and a new row in the deliveries table
 // — so retries, response codes, and timestamps are tracked
 // independently of the original attempt.
 //

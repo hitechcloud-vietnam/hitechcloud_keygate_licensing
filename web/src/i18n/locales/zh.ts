@@ -63,7 +63,6 @@ const zh = {
   "nav.insights": "数据洞察",
   "nav.customers": "客户管理",
   "nav.settings": "系统设置",
-  "nav.sponsor": "赞助我们",
   "nav.menu": "菜单",
   "nav.portal": "用户门户",
   "nav.logout": "退出登录",
@@ -77,7 +76,7 @@ const zh = {
   "dashboard.subtitle": "许可证管理系统概览。",
   "dashboard.statusDistribution": "许可证状态分布",
   "dashboard.recentLicenses": "最近许可证",
-  "dashboard.updateAvailable": "Keygate {version} 新版本可用。",
+  "dashboard.updateAvailable": "HiTechCloud {version} 新版本可用。",
   "dashboard.viewUpdate": "查看详情",
   "dashboard.releaseNotes": "更新日志",
 
@@ -169,7 +168,7 @@ const zh = {
   "licenses.unlink": "解绑",
   "licenses.unlinkTitle": "解绑这个 Stripe 订阅？",
   "licenses.unlinkConfirm":
-    "Keygate 会先向 Stripe 确认，订阅还在就会拒绝。解绑后这张授权重新由本地管理（方案和到期日可以改），而该订阅最后一张发票的退款将不再能通过订阅 id 找到它。",
+    "HiTechCloud 会先向 Stripe 确认，订阅还在就会拒绝。解绑后这张授权重新由本地管理（方案和到期日可以改），而该订阅最后一张发票的退款将不再能通过订阅 id 找到它。",
   "licenses.unlinkDone": "订阅已解绑。",
   "licenses.unlinkNotLinked": "这张授权没有绑定 Stripe 订阅。",
   "licenses.changePlan": "更换方案",
@@ -359,7 +358,7 @@ const zh = {
   "settings.brandColor": "品牌颜色",
   "settings.brandColorDesc": "整个界面使用的主色调。留空则使用默认紫色。",
   "settings.logoUrl": "自定义 Logo URL",
-  "settings.logoUrlDesc": "Logo 图片的 URL（推荐 SVG 格式）。留空则使用默认 Keygate Logo。",
+  "settings.logoUrlDesc": "Logo 图片的 URL（推荐 SVG 格式）。留空则使用默认 HiTechCloud Logo。",
   "settings.emailConfigured": "外发邮件已配置。",
   "settings.emailNotConfigured": "外发邮件未配置，客户不会收到授权和邀请邮件。",
   "settings.emailEnvHint":
@@ -425,7 +424,7 @@ const zh = {
   "settings.reminderDaysDefaultTag": "（默认）",
   "settings.autoEmails": "自动邮件",
   "settings.autoEmailsDesc":
-    "选择 Keygate 自动发给客户的邮件。可以关闭想自己发送的邮件；标有 webhook 的邮件同时会触发一个 webhook 事件，供你的系统处理。",
+    "选择 HiTechCloud 自动发给客户的邮件。可以关闭想自己发送的邮件；标有 webhook 的邮件同时会触发一个 webhook 事件，供你的系统处理。",
   "settings.autoEmailsAlways": "以下邮件始终发送：登录验证码、邀请、许可证发放邮件，以及手动发送的邮件（例如“重发”）。",
   "settings.autoEmailsGroup.reminders": "提醒",
   "settings.autoEmailsGroup.status": "许可证状态",
@@ -475,7 +474,7 @@ const zh = {
   "pagination.rows": "每页",
 
   // Login
-  "setup.title": "设置 Keygate",
+  "setup.title": "设置 HiTechCloud",
   "setup.subtitle": "创建所有者账号和第一个产品。",
   "setup.you": "你的信息",
   "setup.emailHint": "登录时会向这个邮箱发送一次性验证码。",
@@ -824,7 +823,7 @@ const zh = {
   "updateSettings.channelHint":
     "用于 Sparkle 和 Tauri 的地址。一个渠道也会收到更稳定渠道的版本，所以 beta 应用也能收到 stable 版本。",
   "updateSettings.baseUrlWarning":
-    "BASE_URL 设置为 {url}，只有本机才能访问这个地址，其他机器上的应用无法使用下面这些地址。请把 BASE_URL 设成用户的应用访问这台服务器所用的地址，然后重启 Keygate。",
+    "BASE_URL 设置为 {url}，只有本机才能访问这个地址，其他机器上的应用无法使用下面这些地址。请把 BASE_URL 设成用户的应用访问这台服务器所用的地址，然后重启 HiTechCloud。",
   "updateSettings.sparkleField": "Info.plist 中的 SUFeedURL",
   "updateSettings.sparkleHint": "把 {field} 设成你在这里发布的版本号，例如 1.2.0。",
   "updateSettings.tauriField": "tauri.conf.json 中的 endpoints",

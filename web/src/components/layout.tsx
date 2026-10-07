@@ -3,7 +3,6 @@ import {
   Blocks,
   ChevronDown,
   FileKey2,
-  Heart,
   Key,
   Layers,
   LayoutDashboard,
@@ -158,12 +157,6 @@ export function AdminLayout() {
       </nav>
       {/* Settings — fixed at bottom above user menu */}
       <div className="px-2">{renderNavItem(settingsItem)}</div>
-      <a href="https://keygate.app/sponsorships" target="_blank" rel="noopener noreferrer" className="block px-2 pb-1">
-        <div className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-pink-50 hover:text-pink-700 transition-colors">
-          <Heart className="h-4 w-4 text-pink-500 fill-pink-500" />
-          {t("nav.sponsor")}
-        </div>
-      </a>
       <Separator />
       <div className="p-3">
         <DropdownMenu>

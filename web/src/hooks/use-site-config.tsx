@@ -59,8 +59,8 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
           document.title = data.site_name
         }
         // Set default language if user hasn't explicitly chosen one
-        if (data.language && !localStorage.getItem("keygate_locale")) {
-          localStorage.setItem("keygate_locale", data.language)
+        if (data.language && !localStorage.getItem("hitechcloud_locale")) {
+          localStorage.setItem("hitechcloud_locale", data.language)
           document.documentElement.lang = data.language
         }
       })

@@ -64,7 +64,6 @@ const en = {
   "nav.insights": "Insights",
   "nav.customers": "Customers",
   "nav.settings": "Settings",
-  "nav.sponsor": "Sponsor Us",
   "nav.menu": "Menu",
   "nav.portal": "User Portal",
   "nav.logout": "Logout",
@@ -78,7 +77,7 @@ const en = {
   "dashboard.subtitle": "Overview of your license management system.",
   "dashboard.statusDistribution": "License Status Distribution",
   "dashboard.recentLicenses": "Recent Licenses",
-  "dashboard.updateAvailable": "Keygate {version} is available.",
+  "dashboard.updateAvailable": "HiTechCloud {version} is available.",
   "dashboard.viewUpdate": "View Details",
   "dashboard.releaseNotes": "Release Notes",
 
@@ -174,7 +173,7 @@ const en = {
   "licenses.unlink": "Unlink",
   "licenses.unlinkTitle": "Unlink this Stripe subscription?",
   "licenses.unlinkConfirm":
-    "Keygate asks Stripe first and refuses while the subscription is still there. Once unlinked, this license is managed here again — its plan and expiry become editable — and a refund of that subscription’s last invoice will no longer find it by subscription id.",
+    "HiTechCloud asks Stripe first and refuses while the subscription is still there. Once unlinked, this license is managed here again — its plan and expiry become editable — and a refund of that subscription’s last invoice will no longer find it by subscription id.",
   "licenses.unlinkDone": "Subscription unlinked.",
   "licenses.unlinkNotLinked": "This license has no Stripe subscription.",
   "licenses.changePlan": "Change Plan",
@@ -367,7 +366,7 @@ const en = {
   "settings.brandColor": "Brand Color",
   "settings.brandColorDesc": "Primary color used throughout the interface. Leave empty for default.",
   "settings.logoUrl": "Custom Logo URL",
-  "settings.logoUrlDesc": "URL to your logo (SVG recommended). Leave empty for default Keygate logo.",
+  "settings.logoUrlDesc": "URL to your logo (SVG recommended). Leave empty for default HiTechCloud logo.",
   "settings.emailConfigured": "Outgoing email is configured.",
   "settings.emailNotConfigured":
     "Outgoing email is not configured — customers will not receive license or invite emails.",
@@ -437,7 +436,7 @@ const en = {
   "settings.reminderDaysDefaultTag": "(default)",
   "settings.autoEmails": "Automated emails",
   "settings.autoEmailsDesc":
-    "Choose which emails Keygate sends to customers on its own. Turn off any you'd rather send yourself; those marked webhook also fire a webhook event your system can act on.",
+    "Choose which emails HiTechCloud sends to customers on its own. Turn off any you'd rather send yourself; those marked webhook also fire a webhook event your system can act on.",
   "settings.autoEmailsAlways":
     "Always sent: login codes, invitations, license delivery emails, and anything you send by hand (such as Resend).",
   "settings.autoEmailsGroup.reminders": "Reminders",
@@ -489,7 +488,7 @@ const en = {
   "pagination.rows": "Rows",
 
   // Login
-  "setup.title": "Set up Keygate",
+  "setup.title": "Set up HiTechCloud",
   "setup.subtitle": "Create the owner account and your first product.",
   "setup.you": "You",
   "setup.emailHint": "You sign in with a one time code sent to this address.",
@@ -844,7 +843,7 @@ const en = {
   "updateSettings.channelHint":
     "For the Sparkle and Tauri addresses. A channel also receives the more stable ones, so beta apps get stable releases too.",
   "updateSettings.baseUrlWarning":
-    "BASE_URL is set to {url}, an address only this machine can reach, so apps elsewhere cannot use these URLs. Set BASE_URL to the address your users' apps reach this server at, then restart Keygate.",
+    "BASE_URL is set to {url}, an address only this machine can reach, so apps elsewhere cannot use these URLs. Set BASE_URL to the address your users' apps reach this server at, then restart HiTechCloud.",
   "updateSettings.sparkleField": "SUFeedURL in Info.plist",
   "updateSettings.sparkleHint": "Set {field} to the version you publish here, such as 1.2.0.",
   "updateSettings.tauriField": "Endpoint in tauri.conf.json",
