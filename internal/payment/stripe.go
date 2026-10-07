@@ -21,6 +21,7 @@ import (
 	"github.com/stripe/stripe-go/v82"
 	portalsession "github.com/stripe/stripe-go/v82/billingportal/session"
 	"github.com/stripe/stripe-go/v82/checkout/session"
+	stripecoupon "github.com/stripe/stripe-go/v82/coupon"
 	stripecustomer "github.com/stripe/stripe-go/v82/customer"
 	stripeinvoice "github.com/stripe/stripe-go/v82/invoice"
 	"github.com/stripe/stripe-go/v82/invoicepayment"
@@ -28,10 +29,12 @@ import (
 	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/stripe/stripe-go/v82/webhook"
 
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/coupon"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/license"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/service"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/store"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/tax"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/pkg/apperr"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/pkg/response"
 	"github.com/uptrace/bun"
@@ -175,6 +178,26 @@ func (h *StripeHandler) CreateCheckoutSession(c *gin.Context) {
 
 // CheckoutByPlan handles GET /pay/:checkout_id — looks up plan by checkout_id,
 // creates a Stripe Checkout Session, and redirects to Stripe.
+//
+// Optional query parameters carry the buyer's checkout terms and are
+// validated here, on the server:
+//
+//	coupon_code    a coupon from the operator's coupon table, checked with
+//	               the coupon engine; an unusable code is refused before any
+//	               session exists, and a usable one is priced into the
+//	               session as a real discount
+//	country        matched against the operator's active tax rates;
+//	               exclusive tax is added to the amount charged, inclusive
+//	               tax is already inside the listed price and is not
+//	tax_inclusive  the buyer's pricing mode ("1"/"true"/"yes"); when the
+//	               parameter is absent the rate rows decide — a country
+//	               whose rates are all marked inclusive prices inclusive
+//
+// Every amount is re-derived from Plan.StripePriceID through the same
+// calculation the quote endpoint answers with; nothing else a client
+// sends is read. The coupon and tax facts of the sale are stamped on
+// the session's metadata so the ledger records them when the payment
+// settles (see checkout_terms.go).
 func (h *StripeHandler) CheckoutByPlan(c *gin.Context) {
 	checkoutID := c.Param("checkout_id")
 	if len(checkoutID) != 8 {
@@ -214,6 +237,69 @@ func (h *StripeHandler) CheckoutByPlan(c *gin.Context) {
 		mode = string(stripe.CheckoutSessionModePayment)
 	}
 
+	// The buyer's coupon code is resolved through the coupons table and
+	// validated by the coupon engine below, as part of the pricing; an
+	// unknown code is its own refusal.
+	couponCode := coupon.NormalizeCode(c.Query("coupon_code"))
+	var cpn *coupon.Coupon
+	if couponCode != "" {
+		row, err := h.Store.FindCouponByCode(c, couponCode)
+		if errors.Is(err, sql.ErrNoRows) {
+			c.String(http.StatusBadRequest, "coupon not found")
+			return
+		}
+		if err != nil {
+			slog.Error("stripe checkout: failed to look up coupon", "coupon", couponCode, "error", err)
+			c.String(http.StatusInternalServerError, "checkout unavailable")
+			return
+		}
+		eng := row.ToEngine()
+		cpn = &eng
+	}
+
+	// Tax rates are the operator's configuration matched against the
+	// buyer's country — never something the request supplies. No
+	// country means no sale to match a rate to, and taxing with every
+	// rate in the table would be worse than taxing not at all.
+	country := strings.ToUpper(strings.TrimSpace(c.Query("country")))
+	taxParam := strings.TrimSpace(c.Query("tax_inclusive"))
+	taxInclusive := queryFlag(taxParam)
+	var rates []tax.Rate
+	if country != "" {
+		rows, err := h.Store.ListActiveTaxRatesForCountry(c, country, "")
+		if err != nil {
+			slog.Error("stripe checkout: failed to look up tax rates", "country", country, "error", err)
+			c.String(http.StatusInternalServerError, "checkout unavailable")
+			return
+		}
+		for _, r := range rows {
+			rates = append(rates, r.ToEngine())
+		}
+		// The link's tax_inclusive flag is the checkout's word on the
+		// pricing mode; when the link says nothing, the operator's own
+		// rate rows decide it.
+		if taxParam == "" {
+			taxInclusive = allRatesInclusive(rows)
+		}
+	}
+
+	// Price the sale exactly as the quote endpoint prices it: one line
+	// at the Stripe Price, the resolved coupon, the matched rates. An
+	// unusable coupon is refused here — before any Stripe object for
+	// this sale exists.
+	currency := strings.ToUpper(string(sp.Currency))
+	res, err := priceCheckout(c, plan, sp.UnitAmount, currency, cpn, rates, taxInclusive)
+	if err != nil {
+		var ae *apperr.AppError
+		if errors.As(err, &ae) && ae.Code == "COUPON_INVALID" {
+			c.String(http.StatusBadRequest, "coupon not usable: "+ae.Message)
+			return
+		}
+		slog.Error("stripe checkout: cannot price the sale", "plan_id", plan.ID, "error", err)
+		c.String(http.StatusServiceUnavailable, "payment configuration error")
+		return
+	}
+
 	params := &stripe.CheckoutSessionParams{
 		Mode: stripe.String(mode),
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
@@ -223,11 +309,80 @@ func (h *StripeHandler) CheckoutByPlan(c *gin.Context) {
 		CancelURL:           stripe.String(h.BaseURL + "/pricing"),
 		AllowPromotionCodes: stripe.Bool(true),
 	}
+
+	// The discount becomes a real one-time Stripe coupon for exactly
+	// the computed amount, so the session's amount_discount IS the
+	// discount the ledger records and the receipt shows the cut. A
+	// fixed amount (not a percent) keeps the discount at the minor
+	// unit the engine computed — Stripe cannot re-round it — and the
+	// plan's own Price stays on the line, so subscription renewals and
+	// plan resolution from line items keep working. The engine has
+	// already capped the discount at the subtotal, so it cannot reach
+	// past the charge.
+	if res.DiscountMinor > 0 && res.AppliedCoupon != nil {
+		sc, err := stripecoupon.New(&stripe.CouponParams{
+			AmountOff:      stripe.Int64(res.DiscountMinor),
+			Currency:       stripe.String(strings.ToLower(currency)),
+			Duration:       stripe.String(string(stripe.CouponDurationOnce)),
+			MaxRedemptions: stripe.Int64(1),
+			Name:           stripe.String(coupon.NormalizeCode(res.AppliedCoupon.Code)),
+		})
+		if err != nil {
+			slog.Error("stripe checkout: failed to create the discount coupon", "coupon", couponCode, "error", err)
+			c.String(http.StatusServiceUnavailable, "payment configuration error")
+			return
+		}
+		params.Discounts = []*stripe.CheckoutSessionDiscountParams{{Coupon: stripe.String(sc.ID)}}
+	}
+
+	// Exclusive tax is added to the amount charged as its own line,
+	// named for the jurisdiction on the receipt. Inclusive tax already
+	// lives inside the listed price and is never added again. Stripe
+	// Tax is deliberately not involved: the rate table is the
+	// operator's configuration and the tax engine is the calculator.
+	if !taxInclusive && res.TaxMinor > 0 {
+		item := &stripe.CheckoutSessionLineItemParams{
+			PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+				Currency:   stripe.String(strings.ToLower(currency)),
+				UnitAmount: stripe.Int64(res.TaxMinor),
+				ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+					Name: stripe.String(taxLineLabel(rates)),
+				},
+			},
+			Quantity: stripe.Int64(1),
+		}
+		// A subscription session may only carry recurring prices, so
+		// the tax line copies the plan price's interval and is billed
+		// again at each renewal — which is when tax is due again.
+		if sp.Type != "one_time" && sp.Recurring != nil {
+			count := sp.Recurring.IntervalCount
+			if count < 1 {
+				count = 1
+			}
+			item.PriceData.Recurring = &stripe.CheckoutSessionLineItemPriceDataRecurringParams{
+				Interval:      stripe.String(string(sp.Recurring.Interval)),
+				IntervalCount: stripe.Int64(count),
+			}
+		}
+		params.LineItems = append(params.LineItems, item)
+	}
+
 	params.Metadata = map[string]string{
 		"plan_id":       plan.ID,
 		"product_id":    plan.ProductID,
 		metaUpdatesDays: strconv.Itoa(plan.UpdatesDays),
 		metaLicenseType: plan.LicenseType,
+	}
+	terms := checkoutTermsMetadata(res, rates, taxInclusive)
+	for k, v := range terms {
+		params.Metadata[k] = v
+	}
+	if len(terms) > 0 {
+		// The stamped facts account for every minor unit of the
+		// charge; a Stripe promotion code added at checkout would
+		// silently rewrite the split the ledger reconstructs from
+		// them. Sessions without terms keep today's behaviour.
+		params.AllowPromotionCodes = nil
 	}
 
 	s, err := session.New(params)

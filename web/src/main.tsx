@@ -25,10 +25,14 @@ import ReleasesPage from "@/pages/admin/releases"
 import SettingsPage from "@/pages/admin/settings"
 import TaxRatesPage from "@/pages/admin/tax-rates"
 import WebhooksPage from "@/pages/admin/webhooks"
+import CheckoutPage from "@/pages/checkout"
 import CheckoutSuccessPage from "@/pages/checkout-success"
 import LoginPage from "@/pages/login"
 import PortalAccountPage from "@/pages/portal/account"
+import PortalAPIKeysPage from "@/pages/portal/api-keys"
+import PortalDownloadsPage from "@/pages/portal/downloads"
 import PortalLicensesPage from "@/pages/portal/licenses"
+import PortalOrdersPage from "@/pages/portal/orders"
 import SetupPage from "@/pages/setup"
 import "./index.css"
 
@@ -57,6 +61,7 @@ createRoot(document.getElementById("root")!).render(
                     <Route path="/setup" element={<SetupPage />} />
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/checkout/success" element={<CheckoutSuccessPage />} />
+                    <Route path="/checkout/:checkout_id" element={<CheckoutPage />} />
                     <Route path="/accept-invite" element={<AcceptInvitePage />} />
 
                     {/* Admin */}
@@ -82,6 +87,9 @@ createRoot(document.getElementById("root")!).render(
                     {/* Portal */}
                     <Route path="/portal" element={<PortalLayout />}>
                       <Route index element={<PortalLicensesPage />} />
+                      <Route path="orders" element={<PortalOrdersPage />} />
+                      <Route path="downloads" element={<PortalDownloadsPage />} />
+                      <Route path="api-keys" element={<PortalAPIKeysPage />} />
                       <Route path="account" element={<PortalAccountPage />} />
                     </Route>
 

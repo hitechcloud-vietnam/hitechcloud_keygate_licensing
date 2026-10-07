@@ -2,6 +2,7 @@ import {
   BarChart3,
   Blocks,
   ChevronDown,
+  Download,
   FileKey2,
   Key,
   Layers,
@@ -284,6 +285,9 @@ export function PortalLayout() {
 
   const portalNav = [
     { to: "/portal", label: t("nav.licenses"), icon: Key },
+    { to: "/portal/orders", label: t("nav.orders"), icon: ShoppingCart },
+    { to: "/portal/downloads", label: t("nav.downloads"), icon: Download },
+    { to: "/portal/api-keys", label: t("nav.apiKeys"), icon: FileKey2 },
     { to: "/portal/account", label: t("nav.settings"), icon: User },
   ]
   const location = useLocation()

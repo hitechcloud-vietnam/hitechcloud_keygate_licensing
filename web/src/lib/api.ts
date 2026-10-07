@@ -7,6 +7,20 @@ const BASE = `${import.meta.env.VITE_API_URL || ""}/api/v1`
 // auth layer retries instead (see AuthProvider).
 export class ServiceUnavailableError extends Error {}
 
+// ApiError is a request the server answered with a structured error. It
+// carries the machine-readable error code beside the human message so a
+// page can route the message to the right place — a coupon refusal goes
+// next to the coupon field, not into a generic toast.
+export class ApiError extends Error {
+  code: string
+  status: number
+  constructor(message: string, status: number, code = "") {
+    super(message)
+    this.status = status
+    this.code = code
+  }
+}
+
 type RefreshOutcome = "ok" | "denied" | "unavailable"
 
 // The session cookie lives 24 hours; the refresh cookie 30 days. When a
@@ -94,7 +108,9 @@ async function request<T>(path: string, opts?: RequestInit, retried = false): Pr
       `Request failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`
     // A 429 or 5xx says nothing about the session: the server is busy or
     // failing. Callers that decide "signed in or not" must tell it apart.
-    throw res.status === 429 || res.status >= 500 ? new ServiceUnavailableError(msg) : new Error(msg)
+    const code = typeof json?.error?.code === "string" ? json.error.code : ""
+    if (res.status === 429 || res.status >= 500) throw new ServiceUnavailableError(msg)
+    throw new ApiError(msg, res.status, code)
   }
   return (json?.data !== undefined ? json.data : json) as T
 }
@@ -153,6 +169,10 @@ export const auth = {
 export const checkout = {
   verify: (sessionId: string) =>
     get<{ status: string; email?: string; kind?: string }>(`/checkout/verify?session_id=${sessionId}`),
+  // Public pricing preview of a checkout (items + coupon + tax) before
+  // payment. Unit prices are resolved server-side — there is no amount
+  // field to send. The body is pinned by the checkout contract.
+  quote: (body: CheckoutQuoteRequest) => post<CheckoutQuoteResult>("/checkout/quote", body),
 }
 
 // ─── Invites (public, token-only) ───
@@ -207,6 +227,31 @@ export const portal = {
   getInvoices: (licenseId: string) =>
     get<{ invoices: Invoice[] }>(`/portal/subscription/invoices?license_id=${licenseId}`),
   renewUpdates: (data: { license_id: string }) => post<{ url: string }>("/portal/updates/renew", data),
+
+  // ─── Portal commerce: orders, invoices, downloads (Phase 5) ───
+  // The logged-in customer's own commerce records. Ownership is
+  // enforced server-side against the session email; a lookup that is
+  // not the customer's answers exactly like a missing one.
+  listPortalOrders: (params?: { status?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ orders: Order[] }>>(`/portal/orders?${listQuery(params)}`),
+  getPortalOrder: (id: string) => get<{ order: Order; invoices: OrderInvoice[] }>(`/portal/orders/${id}`),
+  listPortalOrderInvoices: (id: string, params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ invoices: OrderInvoice[] }>>(`/portal/orders/${id}/invoices?${listQuery(params)}`),
+  getPortalInvoice: (id: string) => get<{ invoice: OrderInvoice; order: Order }>(`/portal/invoices/${id}`),
+  // Downloads answer with the whole entitled list under `downloads`
+  // (not paged): what a customer may fetch is bounded by their
+  // licences, not by a page size.
+  listPortalDownloads: (params?: { channel?: string; platform?: string }) =>
+    get<{ downloads: PortalDownload[] }>(`/portal/downloads?${listQuery(params)}`),
+
+  // ─── Customer API keys (portal) ───
+  listPortalAPIKeys: (params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ api_keys: CustomerAPIKey[] }>>(`/portal/api-keys?${listQuery(params)}`),
+  // The plaintext secret is returned exactly once, on creation. DELETE
+  // is a soft revoke (revoked_at stamped, row kept for the audit trail).
+  createPortalAPIKey: (data: { name: string; scopes?: string; expires_at?: string }) =>
+    post<{ api_key: CustomerAPIKey; secret: string; note: string }>("/portal/api-keys", data),
+  revokePortalAPIKey: (id: string) => del<CustomerAPIKey>(`/portal/api-keys/${id}`),
 }
 
 // ─── Admin ───
@@ -1266,4 +1311,87 @@ export interface QuoteResult {
   // The coupon behind discount_minor, in the engine's own spelling of
   // the type ("percent_off" / "fixed_amount_off").
   applied_coupon: { code: string; type: string; value: number; currency?: string } | null
+}
+
+// PortalDownload is one release artifact a customer is entitled to
+// download. It carries metadata and pointers into the existing
+// license-gated download flow — never a credential or a signed link.
+export interface PortalDownload {
+  license_id: string
+  product_id: string
+  product_name: string
+  product_slug: string
+  version: string
+  channel: string
+  platform: string
+  filename: string
+  file_size: number
+  sha256: string
+  published_at?: string
+  download_url: string
+}
+
+// CustomerAPIKey is a customer's own portal API key. The secret is
+// returned exactly once, on creation; only its prefix is stored and
+// shown thereafter. `scopes` is a comma-separated string.
+export interface CustomerAPIKey {
+  id: string
+  user_id: string
+  name: string
+  key_prefix: string
+  scopes?: string
+  expires_at?: string
+  last_used_at?: string
+  revoked_at?: string
+  created_at: string
+  updated_at: string
+}
+
+// ─── Checkout quote (public pricing preview) ───
+// POST /checkout/quote prices a checkout — items, coupon, tax — without
+// writing anything. Unit prices are resolved server-side; there is no
+// amount field to send. Every amount is integer minor units.
+export interface CheckoutQuoteItem {
+  checkout_id: string
+  quantity: number
+}
+export interface CheckoutQuoteRequest {
+  items: CheckoutQuoteItem[]
+  coupon_code?: string
+  country?: string
+  region?: string
+  tax_inclusive?: boolean
+}
+export interface CheckoutQuoteLine {
+  sku?: string
+  product_id?: string
+  plan_id?: string
+  description?: string
+  quantity: number
+  unit_amount_minor: number
+  line_subtotal_minor: number
+  line_discount_minor: number
+  line_tax_minor: number
+  line_total_minor: number
+}
+export interface CheckoutQuoteTaxRate {
+  jurisdiction: string
+  basis_points: number
+}
+export interface CheckoutAppliedCoupon {
+  code: string
+  type: string
+  value: number
+  currency?: string
+}
+export interface CheckoutQuoteResult {
+  currency: string
+  tax_inclusive: boolean
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+  lines?: CheckoutQuoteLine[]
+  applied_coupon: CheckoutAppliedCoupon | null
+  tax_rates?: CheckoutQuoteTaxRate[]
 }

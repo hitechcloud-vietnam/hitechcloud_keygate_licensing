@@ -501,6 +501,9 @@ func main() {
 	checkoutQuoteH := handler.NewCheckoutQuoteHandler(orderSvc, db)
 	portalCommerceH := handler.NewPortalCommerceHandler(db)
 	apiKeyPortalH := handler.NewAPIKeyPortalHandler(db)
+	// Marketplace catalog (Phase 6): categories + public discovery.
+	categoryAdminH := handler.NewCategoryAdminHandler(db)
+	marketplaceH := handler.NewMarketplaceHandler(db)
 
 	// Sync ADMIN_EMAILS to database roles (backward compatibility / initial setup)
 	if len(cfg.AdminEmails) > 0 {
@@ -872,6 +875,17 @@ func main() {
 	v1.GET("/products/:product_slug/plans",
 		middleware.RateLimitByIPScoped("public_plans", cfg.RateLimitAPI, time.Minute),
 		publicPlansH.ListPlans)
+
+	// Public marketplace catalogue (Phase 6): discovery + product
+	// pages. Anonymous and read-only (no Stripe lookups), but each
+	// request runs search queries, so it gets its own rate-limit
+	// bucket like public_plans rather than sharing the API budget.
+	marketplace := v1.Group("/marketplace", middleware.RateLimitByIPScoped("marketplace", cfg.RateLimitAPI, time.Minute))
+	{
+		marketplace.GET("/categories", marketplaceH.ListCategories)
+		marketplace.GET("/products", marketplaceH.ListProducts)
+		marketplace.GET("/products/:slug", marketplaceH.GetProduct)
+	}
 
 	v1.POST("/webhook/stripe", middleware.RateLimitByIPScoped("stripe_webhook", 60, time.Minute), stripeH.Webhook)
 	// Stripe verify is hit by every successful checkout return, so the
@@ -1286,6 +1300,13 @@ func main() {
 		// Order price preview (no persistence). Registered outside /orders/:id
 		// because gin cannot mix a static segment with a param sibling.
 		admin.POST("/quotes", orderAdminH.Preview)
+
+		// Marketplace catalog (Phase 6): categories + product tagging.
+		admin.GET("/categories", categoryAdminH.List)
+		admin.GET("/categories/:id", categoryAdminH.Get)
+		admin.POST("/categories", categoryAdminH.Create)
+		admin.PATCH("/categories/:id", categoryAdminH.Update)
+		admin.DELETE("/categories/:id", categoryAdminH.Delete)
 
 		admin.GET("/settings", adminH.GetSettings)
 		admin.PUT("/settings", adminH.UpdateSettings)

@@ -27,6 +27,16 @@ import (
 // receipt always matches the charge regardless of how prices, coupons
 // or tax have moved since.
 //
+// The coupon and tax facts stamped on the session when it was created
+// (see checkout_terms.go) are preferred for the Order's coupon/tax
+// columns and for splitting the charge into Subtotal/Discount/Tax;
+// sessions that carry no such stamp fall back to the totals-derived
+// reconstruction this has always done. Either way the ledger
+// invariants hold exactly:
+//
+//	Subtotal − Discount + Tax == Total   (exclusive tax)
+//	Subtotal − Discount        == Total  (inclusive tax)
+//
 // Idempotent per Stripe session: the session id is the order's external
 // id and idempotency key, so one paid session yields one order — the
 // same rule the licence fulfilment already follows.
@@ -54,15 +64,17 @@ func (h *StripeHandler) recordOrder(ctx context.Context, lic *model.License, pla
 	}
 	total := sess.AmountTotal
 	currency := strings.ToUpper(string(sess.Currency))
-	var discount, taxMinor int64
+	var detailsDiscount, detailsTax int64
 	if sess.TotalDetails != nil {
-		discount = sess.TotalDetails.AmountDiscount
-		taxMinor = sess.TotalDetails.AmountTax
+		detailsDiscount = sess.TotalDetails.AmountDiscount
+		detailsTax = sess.TotalDetails.AmountTax
 	}
-	// Rebuild the pre-discount subtotal so the ledger invariant
-	// Subtotal − Discount + Tax == Total holds. Stripe's AmountSubtotal
-	// is net of discounts, so it is not that number.
-	subtotal := total - taxMinor + discount
+	// The stamped coupon/tax facts say how the charge adds up; without
+	// them the split is rebuilt from the totals alone, which keeps the
+	// invariant Subtotal − Discount + Tax == Total because Stripe's
+	// AmountSubtotal is net of discounts, so it is not that number.
+	terms := ledgerTermsFromMetadata(sess.Metadata)
+	subtotal, discount, taxMinor := ledgerMoney(total, detailsDiscount, detailsTax, terms)
 
 	now := time.Now()
 	order := &model.Order{
@@ -93,6 +105,10 @@ func (h *StripeHandler) recordOrder(ctx context.Context, lic *model.License, pla
 	if lic != nil {
 		order.LicenseID = lic.ID
 	}
+	// The coupon/tax columns are the sale's facts as they were when the
+	// session was created, never re-read from the coupon or tax tables,
+	// which may have moved since.
+	terms.applyTo(order)
 	if err := h.Store.CreateOrder(ctx, order); err != nil {
 		if isUniqueRef(err) {
 			// A concurrent writer got there first; its order stands.

@@ -27,7 +27,10 @@ import (
 // the world. The integration test at the bottom trades the fakes for a
 // real store when TEST_DATABASE_URL is set.
 
-type quoteFakeCatalog struct{ plans map[string]*model.Plan }
+type quoteFakeCatalog struct {
+	plans     map[string]*model.Plan
+	checkouts map[string]string // checkout id → plan id
+}
 
 func (f quoteFakeCatalog) FindPlanByID(_ context.Context, id string) (*model.Plan, error) {
 	p, ok := f.plans[id]
@@ -35,6 +38,16 @@ func (f quoteFakeCatalog) FindPlanByID(_ context.Context, id string) (*model.Pla
 		return nil, sql.ErrNoRows
 	}
 	return p, nil
+}
+
+// FindPlanByCheckoutID mirrors the store's checkout-id lookup — the
+// one payment.CheckoutByPlan pays through.
+func (f quoteFakeCatalog) FindPlanByCheckoutID(_ context.Context, checkoutID string) (*model.Plan, error) {
+	id, ok := f.checkouts[checkoutID]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	return f.FindPlanByID(nil, id)
 }
 
 // quoteFakeTaxes mirrors the store's matching rules (country equal,
@@ -115,7 +128,14 @@ func newQuoteFixture() quoteFixture {
 			StripePriceID: "price_gone", Active: false},
 		"plan_free": {ID: "plan_free", ProductID: "prod_1", Name: "Unpriced", Slug: "unpriced",
 			Active: true},
-	}}
+	},
+		checkouts: map[string]string{
+			"chk_basic": "plan_basic",
+			"chk_pro":   "plan_pro",
+			"chk_gone":  "plan_gone",
+			"chk_free":  "plan_free",
+		},
+	}
 	prices := &quoteFakePrices{
 		amounts:    map[string]int64{"price_basic": 1999, "price_pro": 2000, "price_eur": 1500, "price_gone": 999},
 		currencies: map[string]string{"price_eur": "EUR"},
@@ -487,6 +507,100 @@ func TestCheckoutQuoteRequestRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An item may name its plan by the checkout_id of the payment link
+// instead of a plan_id — the same lookup CheckoutByPlan pays through —
+// and prices it identically. A checkout_id that names nothing, or one
+// sent alongside a plan_id, is a 400 that says which item and why.
+func TestCheckoutQuoteCheckoutIDItems(t *testing.T) {
+	t.Run("resolves the plan behind the payment link", func(t *testing.T) {
+		fx := newQuoteFixture()
+		fx.prices.amounts["price_basic"] = 2000
+		w := quoteServe(t, fx.handler,
+			`{"items":[{"checkout_id":"chk_basic","quantity":2}],"coupon_code":"SAVE10"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		b := quoteDecode(t, w)
+		if b.Data.SubtotalMinor != 4000 || b.Data.DiscountMinor != 400 || b.Data.TotalMinor != 3600 {
+			t.Errorf("totals = %d/%d/%d, want 4000/400/3600",
+				b.Data.SubtotalMinor, b.Data.DiscountMinor, b.Data.TotalMinor)
+		}
+		if len(b.Data.Lines) != 1 || b.Data.Lines[0].PlanID != "plan_basic" || b.Data.Lines[0].Quantity != 2 {
+			t.Errorf("lines = %+v, want plan_basic ×2", b.Data.Lines)
+		}
+	})
+
+	t.Run("takes coupon and tax like a plan_id item", func(t *testing.T) {
+		fx := newQuoteFixture()
+		fx.prices.amounts["price_basic"] = 2000
+		fx.taxes.rates = []*model.TaxRate{
+			{Jurisdiction: "VAT-VN", BasisPoints: 1000, Country: "VN", Active: true},
+		}
+		w := quoteServe(t, fx.handler,
+			`{"items":[{"checkout_id":"chk_basic","quantity":1}],"coupon_code":"SAVE10","country":"vn"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		b := quoteDecode(t, w)
+		// 2000 − 200 + 10% VAT on the 1800 left.
+		if b.Data.SubtotalMinor != 2000 || b.Data.DiscountMinor != 200 ||
+			b.Data.TaxMinor != 180 || b.Data.TotalMinor != 1980 {
+			t.Errorf("totals = %d/%d/%d/%d, want 2000/200/180/1980",
+				b.Data.SubtotalMinor, b.Data.DiscountMinor, b.Data.TaxMinor, b.Data.TotalMinor)
+		}
+	})
+
+	t.Run("unknown checkout_id", func(t *testing.T) {
+		fx := newQuoteFixture()
+		w := quoteServe(t, fx.handler, `{"items":[{"checkout_id":"chk_nope","quantity":1}]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+		b := quoteDecode(t, w)
+		if b.Error == nil || b.Error.Code != "BAD_REQUEST" ||
+			!strings.Contains(b.Error.Message, `unknown checkout_id "chk_nope"`) {
+			t.Errorf("error = %+v, want BAD_REQUEST naming the checkout_id", b.Error)
+		}
+	})
+
+	t.Run("plan_id and checkout_id together", func(t *testing.T) {
+		fx := newQuoteFixture()
+		w := quoteServe(t, fx.handler,
+			`{"items":[{"plan_id":"plan_basic","checkout_id":"chk_basic","quantity":1}]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+		b := quoteDecode(t, w)
+		if b.Error == nil || !strings.Contains(b.Error.Message, "cannot both be set") {
+			t.Errorf("error = %+v, want the both-set refusal", b.Error)
+		}
+	})
+
+	t.Run("inactive plan behind the link", func(t *testing.T) {
+		fx := newQuoteFixture()
+		w := quoteServe(t, fx.handler, `{"items":[{"checkout_id":"chk_gone","quantity":1}]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+		b := quoteDecode(t, w)
+		if b.Error == nil || !strings.Contains(b.Error.Message, "is not available") {
+			t.Errorf("error = %+v, want the not-available refusal", b.Error)
+		}
+	})
+
+	t.Run("unpriced plan behind the link", func(t *testing.T) {
+		fx := newQuoteFixture()
+		w := quoteServe(t, fx.handler, `{"items":[{"checkout_id":"chk_free","quantity":1}]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+		b := quoteDecode(t, w)
+		if b.Error == nil || !strings.Contains(b.Error.Message, "has no price") {
+			t.Errorf("error = %+v, want the no-price refusal", b.Error)
+		}
+	})
 }
 
 // ─── store-backed integration ───

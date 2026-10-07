@@ -43,11 +43,15 @@ type CheckoutQuoteHandler struct {
 	prices quoteUnitPrice
 }
 
-// quotePlanCatalog resolves a plan id to its row. *store.Store
-// implements it; the seam exists so the quote can be priced in tests
-// without a database.
+// quotePlanCatalog resolves a plan by id or by its 8-character
+// checkout id. *store.Store implements it; the seam exists so the
+// quote can be priced in tests without a database. The checkout-id
+// lookup is the one payment.CheckoutByPlan resolves /pay/:checkout_id
+// through, so a quoted item and the payment link behind it can never
+// name different plans.
 type quotePlanCatalog interface {
 	FindPlanByID(ctx context.Context, id string) (*model.Plan, error)
+	FindPlanByCheckoutID(ctx context.Context, checkoutID string) (*model.Plan, error)
 }
 
 // quoteTaxRates resolves the active tax rates for a sale in a country
@@ -112,8 +116,12 @@ func (stripeUnitPrice) UnitAmount(ctx context.Context, priceID string) (int64, s
 
 // Quote answers POST /checkout/quote.
 //
-// Body: { items: [{plan_id, quantity}], coupon_code?, country?,
-// region?, tax_inclusive? }
+// Body: { items: [{plan_id | checkout_id, quantity}], coupon_code?,
+// country?, region?, tax_inclusive? }
+//
+// Each item names its plan either by plan_id or by the checkout_id of
+// the payment link (the same lookup CheckoutByPlan pays through) —
+// exactly one of the two.
 //
 // The unit amount of every line comes from the plan's Stripe Price, so
 // the request cannot spoof one: there is no amount field to spoof it
@@ -122,8 +130,9 @@ func (stripeUnitPrice) UnitAmount(ctx context.Context, priceID string) (int64, s
 func (h *CheckoutQuoteHandler) Quote(c *gin.Context) {
 	var req struct {
 		Items []struct {
-			PlanID   string `json:"plan_id"`
-			Quantity int64  `json:"quantity"`
+			PlanID     string `json:"plan_id"`
+			CheckoutID string `json:"checkout_id"`
+			Quantity   int64  `json:"quantity"`
 		} `json:"items"`
 		CouponCode   string `json:"coupon_code"`
 		Country      string `json:"country"`
@@ -146,22 +155,43 @@ func (h *CheckoutQuoteHandler) Quote(c *gin.Context) {
 	lines := make([]service.Line, 0, len(req.Items))
 	currency := ""
 	for i, it := range req.Items {
-		if strings.TrimSpace(it.PlanID) == "" {
-			response.BadRequest(c, fmt.Sprintf("items[%d]: plan_id is required", i))
+		planID, checkoutID := strings.TrimSpace(it.PlanID), strings.TrimSpace(it.CheckoutID)
+		if planID == "" && checkoutID == "" {
+			response.BadRequest(c, fmt.Sprintf("items[%d]: plan_id is required unless checkout_id is set", i))
+			return
+		}
+		if planID != "" && checkoutID != "" {
+			response.BadRequest(c, fmt.Sprintf("items[%d]: plan_id and checkout_id cannot both be set", i))
 			return
 		}
 		if it.Quantity < 1 {
 			response.BadRequest(c, fmt.Sprintf("items[%d]: quantity must be at least 1", i))
 			return
 		}
-		plan, err := h.plans.FindPlanByID(c, strings.TrimSpace(it.PlanID))
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				response.BadRequest(c, fmt.Sprintf("items[%d]: unknown plan_id %q", i, it.PlanID))
+		var plan *model.Plan
+		var err error
+		if planID != "" {
+			plan, err = h.plans.FindPlanByID(c, planID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					response.BadRequest(c, fmt.Sprintf("items[%d]: unknown plan_id %q", i, planID))
+					return
+				}
+				response.Internal(c, err)
 				return
 			}
-			response.Internal(c, err)
-			return
+		} else {
+			// The checkout id of the payment link, resolved through the
+			// same lookup CheckoutByPlan pays through.
+			plan, err = h.plans.FindPlanByCheckoutID(c, checkoutID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					response.BadRequest(c, fmt.Sprintf("items[%d]: unknown checkout_id %q", i, checkoutID))
+					return
+				}
+				response.Internal(c, err)
+				return
+			}
 		}
 		if !plan.Active {
 			response.BadRequest(c, fmt.Sprintf("items[%d]: plan %q is not available", i, it.PlanID))
