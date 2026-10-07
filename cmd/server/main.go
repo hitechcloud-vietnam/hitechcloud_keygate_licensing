@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -43,10 +45,17 @@ import (
 // persisted coupon to the coupon engine value the order calculation uses.
 type couponLookup struct{ s *store.Store }
 
-// FindCouponByCode loads a coupon by code and maps it to the engine value.
+// FindCouponByCode loads a coupon by code and maps it to the engine
+// value. A miss arrives from the store as sql.ErrNoRows and is mapped
+// to coupon.ErrCouponNotFound so the order service can tell "no such
+// coupon" (404) from a broken lookup (400) without leaking SQL
+// wording into a customer-facing error.
 func (a couponLookup) FindCouponByCode(ctx context.Context, code string) (*coupon.Coupon, error) {
 	mc, err := a.s.FindCouponByCode(ctx, code)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, coupon.ErrCouponNotFound
+		}
 		return nil, err
 	}
 	eng := mc.ToEngine()
@@ -487,6 +496,11 @@ func main() {
 	taxAdminH := handler.NewTaxAdminHandler(db)
 	orderSvc := service.NewOrderService(db, couponLookup{s: db})
 	orderAdminH := handler.NewOrderAdminHandler(orderSvc, db)
+	// Checkout pricing preview (public) and the customer-facing
+	// commerce surfaces (Phase 5): orders, invoices, downloads, keys.
+	checkoutQuoteH := handler.NewCheckoutQuoteHandler(orderSvc, db)
+	portalCommerceH := handler.NewPortalCommerceHandler(db)
+	apiKeyPortalH := handler.NewAPIKeyPortalHandler(db)
 
 	// Sync ADMIN_EMAILS to database roles (backward compatibility / initial setup)
 	if len(cfg.AdminEmails) > 0 {
@@ -868,6 +882,15 @@ func main() {
 		middleware.RateLimitByIPScoped("checkout_verify", 60, time.Minute),
 		stripeH.VerifyCheckoutSession)
 
+	// Checkout pricing preview: what the cart costs after coupon and
+	// tax, priced server-side from the plan catalog (client-supplied
+	// amounts are never trusted). Its own rate-limit bucket like
+	// public_plans — each request may hit Stripe for a price and runs
+	// coupon validation (plan §742).
+	v1.POST("/checkout/quote",
+		middleware.RateLimitByIPScoped("checkout_quote", cfg.RateLimitAPI, time.Minute),
+		checkoutQuoteH.Quote)
+
 	// Unified checkout: GET /pay/:checkout_id → Stripe
 	r.GET("/pay/:checkout_id", stripeH.CheckoutByPlan)
 
@@ -1124,6 +1147,21 @@ func main() {
 		// Maintenance renewal for perpetual licenses: a one-time
 		// checkout that extends updates_until.
 		portal.POST("/updates/renew", stripeH.RenewUpdates)
+
+		// Customer-facing commerce (Phase 5): the customer's own
+		// orders, invoices and downloads, plus self-service API keys.
+		// Ownership is enforced in the handlers (session email match,
+		// cross-user reads answer 404) — the URL shape proves nothing.
+		portal.GET("/orders", portalCommerceH.ListOrders)
+		portal.GET("/orders/:id", portalCommerceH.GetOrder)
+		portal.GET("/orders/:id/invoices", portalCommerceH.ListInvoices)
+		portal.GET("/invoices/:id", portalCommerceH.GetInvoice)
+		portal.GET("/downloads", portalCommerceH.ListDownloads)
+
+		portal.GET("/api-keys", apiKeyPortalH.List)
+		portal.POST("/api-keys", apiKeyPortalH.Create)
+		portal.GET("/api-keys/:id", apiKeyPortalH.Get)
+		portal.DELETE("/api-keys/:id", apiKeyPortalH.Revoke)
 	}
 
 	// Admin route layout: three groups under /admin, all sharing the

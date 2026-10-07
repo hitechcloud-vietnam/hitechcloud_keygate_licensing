@@ -63,14 +63,14 @@ func (s *Store) CreateOrder(ctx context.Context, o *model.Order) error {
 func (s *Store) FindOrderByID(ctx context.Context, id string) (*model.Order, error) {
 	o := new(model.Order)
 	return o, s.DB.NewSelect().Model(o).Relation("Items").
-		Where("orders.id = ?", id).Scan(ctx)
+		Where(`"order".id = ?`, id).Scan(ctx)
 }
 
 // FindOrderByNumber looks an order up by its human-facing number.
 func (s *Store) FindOrderByNumber(ctx context.Context, num string) (*model.Order, error) {
 	o := new(model.Order)
 	return o, s.DB.NewSelect().Model(o).Relation("Items").
-		Where("orders.order_number = ?", num).Scan(ctx)
+		Where(`"order".order_number = ?`, num).Scan(ctx)
 }
 
 // FindOrderByExternalID finds the order a payment provider is talking
@@ -99,13 +99,15 @@ func (s *Store) FindOrderByIdempotencyKey(ctx context.Context, key string) (*mod
 // email or an order number.
 func (s *Store) ListOrders(ctx context.Context, search, status string, p Page) ([]*model.Order, int, error) {
 	var out []*model.Order
+	// Bun aliases the model by the snake_case of the STRUCT name
+	// (FROM "orders" AS "order"), so qualifiers must use "order".
 	q := s.DB.NewSelect().Model(&out).
-		OrderExpr("orders.created_at DESC, orders.id DESC")
+		OrderExpr(`"order".created_at DESC, "order".id DESC`)
 	if status != "" {
-		q = q.Where("orders.status = ?", status)
+		q = q.Where(`"order".status = ?`, status)
 	}
 	if search != "" {
-		q = q.Where("orders.customer_email ILIKE ? OR orders.order_number ILIKE ?",
+		q = q.Where(`"order".customer_email ILIKE ? OR "order".order_number ILIKE ?`,
 			"%"+search+"%", "%"+search+"%")
 	}
 	total, err := scanPage(ctx, q, p)

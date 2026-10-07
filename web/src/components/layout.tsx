@@ -10,9 +10,12 @@ import {
   LogOut,
   Menu,
   Package,
+  Receipt,
   Rocket,
   ScrollText,
   Settings,
+  ShoppingCart,
+  Ticket,
   User,
   Users,
 } from "lucide-react"
@@ -60,6 +63,14 @@ export function AdminLayout() {
       items: [
         { to: "/admin/licenses", label: t("nav.licenses"), icon: Key },
         { to: "/admin/customers", label: t("nav.customers"), icon: Users },
+      ],
+    },
+    {
+      label: t("nav.commerce"),
+      items: [
+        { to: "/admin/orders", label: t("nav.orders"), icon: ShoppingCart },
+        { to: "/admin/coupons", label: t("nav.coupons"), icon: Ticket },
+        { to: "/admin/tax-rates", label: t("nav.taxRates"), icon: Receipt },
       ],
     },
     {

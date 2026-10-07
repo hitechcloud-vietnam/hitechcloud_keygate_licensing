@@ -579,6 +579,36 @@ export const admin = {
   publicKeyURL: (productId: string) => `${BASE}/admin/products/${productId}/signing-key/public.pem`,
   tauriPublicKey: (productId: string) =>
     get<{ pubkey: string }>(`/admin/products/${productId}/signing-key/tauri-pubkey`),
+
+  // ─── Commerce: coupons, tax rates, orders (Phase 4) ───
+  listCoupons: (params?: { search?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ coupons: Coupon[] }>>(`/admin/coupons?${listQuery(params)}`),
+  getCoupon: (id: string) => get<Coupon>(`/admin/coupons/${id}`),
+  createCoupon: (data: CouponInput) => post<Coupon>("/admin/coupons", data),
+  // The coupon update route is PUT, not PATCH: the handler reads a
+  // partial body either way, but the verb on the wire is the one the
+  // router registered. times_redeemed is deliberately absent — the
+  // counter moves only on redemption.
+  updateCoupon: (id: string, data: CouponInput) => put<Coupon>(`/admin/coupons/${id}`, data),
+  deleteCoupon: (id: string) => del(`/admin/coupons/${id}`),
+
+  listTaxRates: (params?: { search?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ tax_rates: TaxRate[] }>>(`/admin/tax-rates?${listQuery(params)}`),
+  getTaxRate: (id: string) => get<TaxRate>(`/admin/tax-rates/${id}`),
+  createTaxRate: (data: TaxRateInput) => post<TaxRate>("/admin/tax-rates", data),
+  updateTaxRate: (id: string, data: Partial<TaxRateInput>) => patch<TaxRate>(`/admin/tax-rates/${id}`, data),
+  deleteTaxRate: (id: string) => del(`/admin/tax-rates/${id}`),
+
+  listOrders: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ orders: Order[] }>>(`/admin/orders?${listQuery(params)}`),
+  getOrder: (id: string) => get<{ order: Order; invoices: OrderInvoice[] }>(`/admin/orders/${id}`),
+  // Refund takes no body: the server stamps the refund time itself.
+  refundOrder: (id: string) => post<Order>(`/admin/orders/${id}/refund`),
+  listOrderInvoices: (id: string, params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ invoices: OrderInvoice[] }>>(`/admin/orders/${id}/invoices?${listQuery(params)}`),
+  // Price preview without persistence — registered as /admin/quotes,
+  // outside /orders/:id so it cannot collide with that param route.
+  quoteOrder: (data: QuoteRequest) => post<QuoteResult>("/admin/quotes", data),
 }
 
 // ─── Types ───
@@ -1054,3 +1084,186 @@ export const RELEASE_PLATFORMS = [
 ] as const
 
 export const RELEASE_CHANNELS = ["stable", "beta", "alpha", "dev"] as const
+
+// ─── Commerce (Phase 4): coupons, tax rates, orders ───
+//
+// Money is integer minor units and percents are integer basis points
+// (10000 = 100%) end to end — see lib/money.ts for display and input.
+
+export interface Coupon {
+  id: string
+  code: string
+  // The stored vocabulary is "percent_off" | "fixed_off"
+  // (model.CouponType*). "fixed_amount_off" is the pure engine's
+  // spelling and can appear on an order's recorded coupon_type.
+  type: "percent_off" | "fixed_off"
+  value_bps: number
+  value_minor: number
+  currency?: string
+  starts_at?: string
+  ends_at?: string
+  max_redemptions: number
+  times_redeemed: number
+  max_redemptions_per_customer: number
+  minimum_order_minor: number
+  applies_to?: string
+  stackable: boolean
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+// CouponInput is the create body. Update (PUT) takes the same fields;
+// an omitted starts_at/ends_at means "no bound" on create and "keep
+// the stored one" on update.
+export interface CouponInput {
+  code: string
+  type: "percent_off" | "fixed_off"
+  value_bps?: number
+  value_minor?: number
+  currency?: string
+  starts_at?: string
+  ends_at?: string
+  max_redemptions?: number
+  max_redemptions_per_customer?: number
+  minimum_order_minor?: number
+  applies_to?: string
+  stackable?: boolean
+  active?: boolean
+}
+
+export interface TaxRate {
+  id: string
+  jurisdiction: string
+  basis_points: number
+  inclusive: boolean
+  country: string
+  region: string
+  description: string
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+// TaxRateInput is the create body; update (PATCH) accepts the same
+// fields with active only settable on an existing rate — creation
+// always starts active.
+export interface TaxRateInput {
+  jurisdiction: string
+  basis_points?: number
+  inclusive?: boolean
+  country?: string
+  region?: string
+  description?: string
+  active?: boolean
+}
+
+export interface OrderItem {
+  id: string
+  order_id: string
+  sku?: string
+  product_id?: string
+  plan_id?: string
+  description?: string
+  quantity: number
+  unit_amount_minor: number
+  line_subtotal_minor: number
+  line_discount_minor: number
+  line_tax_minor: number
+  line_total_minor: number
+  created_at: string
+}
+
+export interface Order {
+  id: string
+  order_number: string
+  customer_email: string
+  customer_name?: string
+  license_id?: string
+  currency: string
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+  coupon_code?: string
+  // Recorded from the pricing engine, so an order can carry the
+  // engine's "fixed_amount_off" spelling as well as the stored
+  // "fixed_off" one.
+  coupon_type?: string
+  coupon_value_bps?: number
+  coupon_value_minor?: number
+  tax_jurisdiction?: string
+  tax_basis_points?: number
+  tax_inclusive: boolean
+  status: "pending" | "paid" | "failed" | "refunded"
+  payment_provider?: string
+  external_id?: string
+  idempotency_key?: string
+  paid_at?: string
+  refunded_at?: string
+  created_at: string
+  updated_at: string
+  items?: OrderItem[]
+}
+
+// OrderInvoice is the ledger's billing document — one per order — not
+// the Stripe-shaped Invoice above, which describes a portal
+// subscription invoice.
+export interface OrderInvoice {
+  id: string
+  order_id: string
+  invoice_number: string
+  status: "draft" | "open" | "paid" | "void"
+  currency: string
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+  issued_at?: string
+  due_at?: string
+  paid_at?: string
+  created_at: string
+}
+
+export interface QuoteLineInput {
+  sku?: string
+  product_id?: string
+  plan_id?: string
+  description?: string
+  quantity: number
+  unit_amount_minor: number
+}
+
+export interface QuoteRequest {
+  lines: QuoteLineInput[]
+  currency: string
+  coupon_code?: string
+  tax_inclusive?: boolean
+  tax_rates?: { basis_points: number; jurisdiction: string }[]
+}
+
+export interface QuoteLineResult {
+  sku?: string
+  product_id?: string
+  plan_id?: string
+  description?: string
+  quantity: number
+  unit_amount_minor: number
+  line_subtotal_minor: number
+  line_discount_minor: number
+  line_tax_minor: number
+  line_total_minor: number
+}
+
+export interface QuoteResult {
+  currency: string
+  tax_inclusive: boolean
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+  lines?: QuoteLineResult[]
+  // The coupon behind discount_minor, in the engine's own spelling of
+  // the type ("percent_off" / "fixed_amount_off").
+  applied_coupon: { code: string; type: string; value: number; currency?: string } | null
+}

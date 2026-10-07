@@ -31,10 +31,12 @@ func (s *Store) FindTaxRateByJurisdiction(ctx context.Context, jurisdiction stri
 func (s *Store) ListTaxRates(ctx context.Context, search string, p Page) ([]*model.TaxRate, int, error) {
 	var out []*model.TaxRate
 	// jurisdiction is unique, so ordering by it alone is total and a
-	// row cannot move between two pages of one listing.
-	q := s.DB.NewSelect().Model(&out).OrderExpr("tax_rates.jurisdiction ASC")
+	// row cannot move between two pages of one listing. Bun aliases
+	// the model by the snake_case of the STRUCT name
+	// (FROM "tax_rates" AS "tax_rate"), so qualifiers use tax_rate.
+	q := s.DB.NewSelect().Model(&out).OrderExpr("tax_rate.jurisdiction ASC")
 	if search != "" {
-		q = q.Where("tax_rates.jurisdiction ILIKE ? OR tax_rates.country ILIKE ?",
+		q = q.Where("tax_rate.jurisdiction ILIKE ? OR tax_rate.country ILIKE ?",
 			"%"+search+"%", "%"+search+"%")
 	}
 	total, err := scanPage(ctx, q, p)
@@ -77,14 +79,14 @@ func (s *Store) DeleteTaxRate(ctx context.Context, id string) error {
 // match, just the whole set of live rates.
 func (s *Store) ListActiveTaxRatesForCountry(ctx context.Context, country, region string) ([]*model.TaxRate, error) {
 	var out []*model.TaxRate
-	q := s.DB.NewSelect().Model(&out).Where("tax_rates.active = true")
+	q := s.DB.NewSelect().Model(&out).Where("tax_rate.active = true")
 	if country != "" {
-		q = q.Where("tax_rates.country = ?", country)
+		q = q.Where("tax_rate.country = ?", country)
 	}
 	if region != "" {
-		q = q.Where("(tax_rates.region = ? OR tax_rates.region = '')", region)
+		q = q.Where("(tax_rate.region = ? OR tax_rate.region = '')", region)
 	}
-	err := q.OrderExpr("tax_rates.jurisdiction ASC").Scan(ctx)
+	err := q.OrderExpr("tax_rate.jurisdiction ASC").Scan(ctx)
 	return out, err
 }
 

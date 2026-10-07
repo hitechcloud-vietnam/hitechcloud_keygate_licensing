@@ -13,13 +13,17 @@ import AddonsPage from "@/pages/admin/addons"
 import AnalyticsPage from "@/pages/admin/analytics"
 import APIKeysPage from "@/pages/admin/api-keys"
 import AuditPage from "@/pages/admin/audit"
+import CouponsPage from "@/pages/admin/coupons"
 import CustomersPage from "@/pages/admin/customers"
 import DashboardPage from "@/pages/admin/dashboard"
 import LicensesPage from "@/pages/admin/licenses"
+import OrderDetailPage from "@/pages/admin/order-detail"
+import OrdersPage from "@/pages/admin/orders"
 import PlansPage from "@/pages/admin/plans"
 import ProductsPage from "@/pages/admin/products"
 import ReleasesPage from "@/pages/admin/releases"
 import SettingsPage from "@/pages/admin/settings"
+import TaxRatesPage from "@/pages/admin/tax-rates"
 import WebhooksPage from "@/pages/admin/webhooks"
 import CheckoutSuccessPage from "@/pages/checkout-success"
 import LoginPage from "@/pages/login"
@@ -65,6 +69,10 @@ createRoot(document.getElementById("root")!).render(
                       <Route path="api-keys" element={<APIKeysPage />} />
                       <Route path="webhooks" element={<WebhooksPage />} />
                       <Route path="addons" element={<AddonsPage />} />
+                      <Route path="coupons" element={<CouponsPage />} />
+                      <Route path="tax-rates" element={<TaxRatesPage />} />
+                      <Route path="orders" element={<OrdersPage />} />
+                      <Route path="orders/:id" element={<OrderDetailPage />} />
                       <Route path="analytics" element={<AnalyticsPage />} />
                       <Route path="audit" element={<AuditPage />} />
                       <Route path="customers" element={<CustomersPage />} />
