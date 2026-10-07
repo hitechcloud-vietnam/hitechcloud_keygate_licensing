@@ -477,6 +477,28 @@ func randomRef() (string, error) {
 	return string(out), nil
 }
 
+// NewOrderNumber returns a fresh human-facing order number
+// ("HTC-XXXXXXX") in the same format the service's own inserts use. It
+// never fails: if the CSPRNG refuses a draw it falls back to a
+// timestamp-derived reference so a ledger write is not lost to a broken
+// entropy source.
+func NewOrderNumber() string {
+	n, err := randomRef()
+	if err != nil {
+		n = fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return orderNumberPrefix + n
+}
+
+// NewInvoiceNumber is NewOrderNumber for invoices.
+func NewInvoiceNumber() string {
+	n, err := randomRef()
+	if err != nil {
+		n = fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return invoiceNumberPrefix + n
+}
+
 // isUniqueViolation reports whether err is a unique/duplicate key
 // refusal — the shape a generated-number collision takes.
 func isUniqueViolation(err error) bool {

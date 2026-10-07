@@ -989,6 +989,7 @@ func (h *StripeHandler) fulfillCheckout(ctx context.Context, email, customerID, 
 	}
 
 	slog.Info("license created", "email", email, "plan", plan.Name, "source", source)
+	h.recordOrder(ctx, lic, plan, sessionID, email, productName)
 	return true, nil
 }
 
