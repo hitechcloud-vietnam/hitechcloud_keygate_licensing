@@ -25,6 +25,7 @@ import (
 
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/branding"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/config"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/coupon"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/crypto"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/handler"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/license"
@@ -37,6 +38,20 @@ import (
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/version"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/pkg/response"
 )
+
+// couponLookup adapts the coupons store to service.CouponLookup, mapping a
+// persisted coupon to the coupon engine value the order calculation uses.
+type couponLookup struct{ s *store.Store }
+
+// FindCouponByCode loads a coupon by code and maps it to the engine value.
+func (a couponLookup) FindCouponByCode(ctx context.Context, code string) (*coupon.Coupon, error) {
+	mc, err := a.s.FindCouponByCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	eng := mc.ToEngine()
+	return &eng, nil
+}
 
 // credentialQueryParams are query parameters whose values must never
 // reach a log line. An updater sends a signed token this way when it
@@ -466,6 +481,12 @@ func main() {
 	})
 	releaseSigningH := handler.NewReleaseSigningAdminHandler(releaseSigner, db)
 	publicPlansH := handler.NewPublicPlansHandler(db, logger)
+
+	// Commerce (Phase 4): coupons, tax rates, and the order ledger.
+	couponAdminH := handler.NewCouponAdminHandler(db)
+	taxAdminH := handler.NewTaxAdminHandler(db)
+	orderSvc := service.NewOrderService(db, couponLookup{s: db})
+	orderAdminH := handler.NewOrderAdminHandler(orderSvc, db)
 
 	// Sync ADMIN_EMAILS to database roles (backward compatibility / initial setup)
 	if len(cfg.AdminEmails) > 0 {
@@ -1206,6 +1227,27 @@ func main() {
 		admin.POST("/addons", adminH.CreateAddon)
 		admin.PUT("/addons/:id", adminH.UpdateAddon)
 		admin.DELETE("/addons/:id", adminH.DeleteAddon)
+
+		// ─── Commerce: coupons, tax rates, orders ───
+		admin.GET("/coupons", couponAdminH.List)
+		admin.GET("/coupons/:id", couponAdminH.Get)
+		admin.POST("/coupons", couponAdminH.Create)
+		admin.PUT("/coupons/:id", couponAdminH.Update)
+		admin.DELETE("/coupons/:id", couponAdminH.Delete)
+
+		admin.GET("/tax-rates", taxAdminH.List)
+		admin.GET("/tax-rates/:id", taxAdminH.Get)
+		admin.POST("/tax-rates", taxAdminH.Create)
+		admin.PATCH("/tax-rates/:id", taxAdminH.Update)
+		admin.DELETE("/tax-rates/:id", taxAdminH.Delete)
+
+		admin.GET("/orders", orderAdminH.List)
+		admin.GET("/orders/:id", orderAdminH.Get)
+		admin.POST("/orders/:id/refund", orderAdminH.Refund)
+		admin.GET("/orders/:id/invoices", orderAdminH.ListInvoices)
+		// Order price preview (no persistence). Registered outside /orders/:id
+		// because gin cannot mix a static segment with a param sibling.
+		admin.POST("/quotes", orderAdminH.Preview)
 
 		admin.GET("/settings", adminH.GetSettings)
 		admin.PUT("/settings", adminH.UpdateSettings)
