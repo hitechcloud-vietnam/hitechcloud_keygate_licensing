@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# CI only reads the repo; nothing here publishes.
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR supersedes an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: hitechcloud_keygate_licensing
+          POSTGRES_PASSWORD: hitechcloud_keygate_licensing
+          POSTGRES_DB: hitechcloud_keygate_licensing
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+
+      - name: Lint
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test ./... -count=1
+
+      - name: Integration tests
+        env:
+          TEST_DATABASE_URL: postgres://hitechcloud_keygate_licensing:hitechcloud_keygate_licensing@localhost:5432/hitechcloud_keygate_licensing?sslmode=disable
+        run: go test -count=1 -run "Atomic" ./internal/store/
+
+      - name: Build
+        run: go build -o /dev/null ./cmd/server
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install
+        run: cd web && bun install --frozen-lockfile
+
+      - name: Type check
+        run: cd web && bun run typecheck
+
+      - name: Lint
+        run: cd web && bun run lint
+
+      - name: Build
+        run: cd web && bun run build

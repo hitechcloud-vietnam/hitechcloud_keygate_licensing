@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: hitechcloud-vietnam/hitechcloud_keygate_licensing
+
+jobs:
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Release notes are maintained by hand on the GitHub Release page.
+      # This step only opens a DRAFT with GitHub's auto-generated notes
+      # (the PRs/commits since the previous tag) as a starting point — you
+      # edit that draft into user-facing notes and publish it yourself.
+      # Because publishing is manual, re-running this workflow for a tag
+      # never overwrites notes you have already written. generate_release_notes
+      # talks to the GitHub API, so no local git history (fetch-depth) is
+      # needed here.
+      - name: Open draft release
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          generate_release_notes: true
+
+  docker:
+    name: Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set version from tag
+        id: version
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.version.outputs.VERSION }}
+            COMMIT=${{ steps.version.outputs.COMMIT }}
+            BUILD_DATE=${{ steps.version.outputs.BUILD_DATE }}
+          tags: |
+            ghcr.io/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

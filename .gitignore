@@ -1,0 +1,50 @@
+# Build
+/bin/
+tmp/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+/vendor/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+.zed/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI tools
+.claude/
+.claude.*
+.codex/
+.gemini/
+.cursor/
+.aider*
+.copilot/
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Test artifacts
+tests/
+*.test
+*.out
+coverage.html
+seed
+
+# Stray build output from `go build ./cmd/server` without -o
+/server

@@ -1,0 +1,90 @@
+import { CheckCircle, Loader2 } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useSiteConfig } from "@/hooks/use-site-config"
+import { useI18n } from "@/i18n"
+import { checkout } from "@/lib/api"
+
+export default function CheckoutSuccessPage() {
+  const { t } = useI18n()
+  const { site_name, logo_url, attribution_text, attribution_url } = useSiteConfig()
+  const [status, setStatus] = useState<"loading" | "ok" | "error">("loading")
+  const [email, setEmail] = useState("")
+  const [renewal, setRenewal] = useState(false)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get("session_id")
+    if (!sessionId) {
+      setStatus("error")
+      return
+    }
+
+    checkout
+      .verify(sessionId)
+      .then((r) => {
+        setStatus(r.status === "ok" ? "ok" : "loading")
+        if (r.email) setEmail(r.email)
+        setRenewal(r.kind === "renewal")
+      })
+      .catch(() => setStatus("error"))
+  }, [])
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-muted/30">
+      <Card className="w-full max-w-md text-center">
+        <CardHeader>
+          <div className="flex justify-center mb-2">
+            <img src={logo_url || "/logo.svg"} alt={site_name} className="h-12 w-12" />
+          </div>
+          <CardTitle className="text-2xl">{site_name}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {status === "loading" && (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <p className="text-muted-foreground">{t("checkout.verifying")}</p>
+            </div>
+          )}
+          {status === "ok" && (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <CheckCircle className="h-12 w-12 text-green-500" />
+              <h3 className="text-xl font-semibold">{t("checkout.success")}</h3>
+              {renewal ? (
+                <>
+                  <p className="text-muted-foreground">{t("checkout.renewalSuccess")}</p>
+                  <Button className="mt-4" asChild>
+                    <a href="/portal">{t("checkout.backToPortal")}</a>
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="text-muted-foreground">
+                    {email ? t("checkout.licenseSentTo", { email }) : t("checkout.licenseCreated")}
+                  </p>
+                  <Button className="mt-4" asChild>
+                    <a href="/login">{t("checkout.viewLicense")}</a>
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+          {status === "error" && (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <p className="text-muted-foreground">{t("checkout.error")}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      <a
+        href={attribution_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-4 text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+      >
+        {attribution_text}
+      </a>
+    </div>
+  )
+}

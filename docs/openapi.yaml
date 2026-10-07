@@ -1,0 +1,1237 @@
+openapi: 3.1.0
+info:
+  title: HiTechCloud Software License & Commerce Platform API
+  description: |
+    License management API for software products.
+
+    ## Authentication
+
+    Public SDK endpoints (`/license/*`, `/releases/:slug/feed.*`) **do
+    NOT require an API key**. The `license_key` in the request body is
+    the credential; embedding an additional API key in client binaries
+    is security theater (anyone can extract it). Stable release feeds
+    are fully public — trust comes from the per-product Ed25519
+    signature on each artifact, not from URL secrecy.
+
+    For **server-to-server admin access** (CI/CD, billing backends,
+    automation scripts) Keygate provides API keys with the `admin`
+    scope. Pass them as `Authorization: Bearer kg_live_…`. They are
+    equivalent to a logged-in admin session and can call any
+    `/admin/*` endpoint. Mint them in the admin dashboard under
+    **API Keys**.
+
+    ## Idempotency
+
+    Write endpoints (`/license/activate`, `/license/usage`,
+    `/license/floating/checkout`) honor the `Idempotency-Key` header. A
+    retry with the same key + same body replays the cached response
+    (200/4xx) within 24 hours. Same key + different body → 422
+    `IDEMPOTENCY_KEY_CONFLICT`. Concurrent retries while the original
+    is still running → 409 `IDEMPOTENCY_IN_FLIGHT` (retry with backoff).
+
+    ## Response Format
+
+    All responses use a consistent envelope:
+
+    ```json
+    // Success
+    {"success": true, "data": {...}}
+
+    // Error
+    {"success": false, "error": {"code": "ERROR_CODE", "message": "...", "details": {...}}}
+    ```
+
+    Replayed idempotent responses additionally carry the header
+    `Idempotent-Replayed: true`.
+
+    ## Existence-oracle hardening
+
+    `/license/verify` and `/license/deactivate` collapse all
+    "license-knowable" failures (suspended / revoked / expired /
+    wrong device / wrong product) to a single `404 LICENSE_NOT_FOUND`.
+    This prevents an attacker from probing valid `license_key` values
+    by status-code differentiation. Paid users discover lifecycle
+    state via email + the portal, not via these endpoints.
+  version: 1.2.0
+  contact:
+    name: HiTechCloud Viet Nam by Pho Tue SoftWare Solutions JSC
+    url: https://hitechcloud.vn
+    email: hello@hitechcloud.vn
+  license:
+    name: AGPL v3
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: "{server}/api/v1"
+    variables:
+      server:
+        default: http://localhost:9000
+        description: Your Keygate server URL
+
+# Public SDK endpoints have no auth at the route layer. Admin endpoints
+# (out of this doc) use BearerAuth or session cookies.
+security: []
+
+tags:
+  - name: License
+    description: Activate, verify, and deactivate licenses
+  - name: Entitlements
+    description: Check feature access for a license
+  - name: Usage
+    description: Record and query usage against quotas
+  - name: Seats
+    description: Manage team members on a license
+  - name: Floating
+    description: Concurrent session checkout for floating licenses
+  - name: Releases
+    description: License-gated download + auto-update feeds (Sparkle / Velopack / Tauri)
+  - name: Site
+    description: Public site configuration
+
+paths:
+  /config:
+    get:
+      tags: [Site]
+      summary: Public site configuration
+      description: |
+        Settings the login page, customer portal and dashboard read before
+        anyone signs in, plus the attribution notice the AGPL v3 terms
+        (Section 7(b), see NOTICE) require on every UI surface.
+      responses:
+        "200":
+          description: Public settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      site_name: { type: string }
+                      timezone: { type: string }
+                      brand_color: { type: string }
+                      language: { type: string }
+                      logo_url: { type: string }
+                      base_url:
+                        type: string
+                        description: The server's BASE_URL, the address clients reach it at. The dashboard builds the feed URLs it shows from it.
+                      attribution_text:
+                        type: string
+                        description: Attribution notice, "Powered by Keygate". Required by the license.
+                      attribution_url:
+                        type: string
+                        description: Link for the attribution notice. Required by the license.
+  /license/pubkey:
+    get:
+      tags: [License]
+      summary: Get the Ed25519 verification key
+      description: |
+        Returns the Ed25519 public key paired with the server's
+        signing key. SDKs fetch this once (or hard-code it after
+        first run) to verify the offline token returned by
+        /license/activate and /license/verify.
+      responses:
+        "200":
+          description: Verification key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      algorithm:
+                        type: string
+                        enum: [ed25519]
+                      format:
+                        type: string
+                        enum: [hex]
+                      public_key:
+                        type: string
+                        description: 32-byte Ed25519 public key, hex-encoded (64 chars)
+
+  /license/activate:
+    post:
+      tags: [License]
+      summary: Activate a license
+      description: |
+        Registers a device or user identifier against a license.
+        Returns a signed verification token.
+
+        - Re-activating the same identifier returns `already_activated`
+          without consuming an additional slot
+        - Atomic enforcement of `max_activations` from the plan
+          (concurrent retries can never exceed the cap)
+        - Brute-force protected: failed attempts trigger a per-IP
+          exponential lockout (defaults: 5 failures → 30s lockout,
+          configurable via `BF_MAX_FAILS` / `BF_LOCKOUT_SECONDS`)
+        - Supports `Idempotency-Key` header for safe retries
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+            maxLength: 256
+          description: Same key + same body replays cached response for 24h
+          required: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, identifier]
+              properties:
+                license_key:
+                  type: string
+                  example: "KG-ABCD1234-EFGH5678-IJKL9012-MNOP3456"
+                identifier:
+                  type: string
+                  description: Unique device ID or user email
+                  example: "device-a1b2c3d4"
+                identifier_type:
+                  type: string
+                  enum: [device, user]
+                  default: device
+                label:
+                  type: string
+                  description: Human-readable name for the activation
+                  example: "MacBook Pro"
+      responses:
+        "200":
+          description: Activation successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivateResponse"
+        "400":
+          description: Validation failure (missing fields, identifier too long)
+        "403":
+          description: License not usable (expired / suspended / revoked / canceled)
+        "404":
+          description: License not found
+        "409":
+          description: |
+            - `ACTIVATION_LIMIT` — slots exhausted
+            - `IDEMPOTENCY_IN_FLIGHT` — concurrent retry, try again
+        "422":
+          description: |
+            `IDEMPOTENCY_KEY_CONFLICT` — same Idempotency-Key reused
+            with a different body
+        "429":
+          description: Brute-force lockout (`LOCKED_OUT`)
+
+  /license/verify:
+    post:
+      tags: [License]
+      summary: Verify a license activation
+      description: |
+        Checks that a license is valid and the identifier is activated.
+        Returns the license status, plan features, and a signed token.
+
+        The signed token can be verified offline using the server's
+        Ed25519 public key (`GET /license/pubkey`). Token format is
+        `base64url(payload).base64url(ed25519_signature)`, where the
+        signed bytes are the base64url-encoded payload string.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, identifier]
+              properties:
+                license_key:
+                  type: string
+                identifier:
+                  type: string
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyResponse"
+        "404":
+          description: |
+            `LICENSE_NOT_FOUND` — collapsed response for ALL of:
+            license doesn't exist / belongs to another product /
+            wrong device / suspended / revoked / expired. Intentional
+            oracle-hardening (see top-level docs).
+
+  /license/deactivate:
+    post:
+      tags: [License]
+      summary: Deactivate a device or user
+      description: Removes an activation, freeing a slot for a new device.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, identifier]
+              properties:
+                license_key:
+                  type: string
+                identifier:
+                  type: string
+      responses:
+        "200":
+          description: Deactivated
+        "404":
+          description: |
+            `LICENSE_NOT_FOUND` — collapsed for missing license OR
+            unknown identifier (oracle-hardening).
+
+  /license/entitlements:
+    post:
+      tags: [Entitlements]
+      summary: Check feature entitlements
+      description: |
+        Returns all features available for the license's plan,
+        including quota usage for metered features.
+        Includes add-on features if any are attached.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key]
+              properties:
+                license_key:
+                  type: string
+                feature:
+                  type: string
+                  description: Optional — check a single feature only
+      responses:
+        "200":
+          description: Entitlements check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntitlementResponse"
+
+  /license/usage:
+    post:
+      tags: [Usage]
+      summary: Record usage
+      description: |
+        Increments a usage counter for a metered feature.
+        The increment is **atomic** — concurrent requests will never exceed the quota.
+
+        Returns the updated counter with remaining balance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, feature]
+              properties:
+                license_key:
+                  type: string
+                feature:
+                  type: string
+                  example: "api_calls"
+                quantity:
+                  type: integer
+                  default: 1
+                  minimum: 1
+                metadata:
+                  type: object
+                  description: Arbitrary metadata stored with the event
+      responses:
+        "200":
+          description: Usage recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResponse"
+        "429":
+          description: Quota exceeded
+
+  /license/usage/status:
+    post:
+      tags: [Usage]
+      summary: Get quota status
+      description: Returns current usage and remaining quota for a feature.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, feature]
+              properties:
+                license_key:
+                  type: string
+                feature:
+                  type: string
+      responses:
+        "200":
+          description: Quota status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuotaStatusResponse"
+
+  # Seat management moved off the SDK namespace (license_key is the
+  # device credential, not a team-management credential). All three
+  # endpoints now live under /portal and are gated by the portal
+  # session cookie — the license_key in the body only NAMES the
+  # target license; the cookie is what authenticates.
+  /portal/seats:
+    post:
+      tags: [Seats]
+      summary: List seats on a license (portal)
+      description: |
+        Returns all team members for a license owned by the
+        authenticated portal user (or one on which they hold a seat).
+        Returns `404 LICENSE_NOT_FOUND` if the license doesn't exist
+        OR the caller has no relationship to it (oracle-safe).
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key]
+              properties:
+                license_key:
+                  type: string
+      responses:
+        "200":
+          description: Seat list
+        "401":
+          description: Not signed in
+        "404":
+          description: License not found, or not yours
+
+  /portal/seats/add:
+    post:
+      tags: [Seats]
+      summary: Invite a team member (portal)
+      description: |
+        Adds a seat to the license. Only the license owner OR an
+        accepted seat with role `admin` may call this. Seat roles
+        are 2-tier — the license owner (matched by `license.email`)
+        is implicit and never has a seat row of their own.
+        Idempotent — adding the same email twice with the seat
+        still pending rotates the invite token and re-sends the
+        email; if the seat is already accepted, returns the existing
+        seat with no email re-send.
+
+        Cannot invite the license owner's own email (400). Enforces
+        the plan's `max_seats` (409 SEAT_LIMIT). When a seat is
+        added, an invite email goes to the recipient; they accept
+        via `/invites/accept`.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, email]
+              properties:
+                license_key:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                role:
+                  type: string
+                  enum: [admin, member]
+                  default: member
+                  description: |
+                    Seat-level role. `admin` may invite/remove other
+                    seats; `member` may only use the license. The
+                    license owner (identified by `license.email`) is
+                    implicit and never has a seat row of their own.
+      responses:
+        "200":
+          description: Seat added, restored, or already exists
+        "400":
+          description: Self-invite or invalid role
+        "401":
+          description: Not signed in
+        "404":
+          description: License not found, or caller lacks mutation rights
+        "409":
+          description: Seat limit reached (`SEAT_LIMIT`)
+
+  /portal/seats/remove:
+    post:
+      tags: [Seats]
+      summary: Remove a team member (portal)
+      description: |
+        Soft-removes a seat (sets `removed_at`). Same auth rules as
+        `/portal/seats/add` — license owner or accepted admin seat
+        only.
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, seat_id]
+              properties:
+                license_key:
+                  type: string
+                seat_id:
+                  type: string
+      responses:
+        "200":
+          description: Seat removed
+        "401":
+          description: Not signed in
+        "404":
+          description: License or seat not found, or caller lacks mutation rights
+
+  /invites/accept:
+    post:
+      tags: [Seats]
+      summary: Accept a seat invite (public, token-only)
+      description: |
+        Consumes the plain invite token shipped in the seat-invite
+        email. The token IS the email-ownership proof — no prior
+        session is required. On success the server:
+
+        - Creates a user record keyed off the seat's email if none
+          exists (lookup is case-insensitive against `users.email`)
+        - Binds `seats.user_id` and stamps `accepted_at`
+        - Clears `invite_token_hash` so the same token can't be
+          replayed
+        - Issues a portal session cookie so the invitee lands in
+          the portal in one click
+
+        All failure modes (unknown / expired / removed / already
+        accepted token, or a license that is suspended / revoked /
+        canceled / expired) collapse to one opaque
+        `404 SEAT_INVITE_INVALID` so an attacker can't probe token
+        validity by response shape. When a policy check fails (e.g.
+        license suspended at accept time), the seat row is rolled
+        back to its pre-accept state and the token is consumed
+        anyway; the owner must re-invite to mint a fresh token.
+
+        IP rate-limited to 60 requests/minute. No authentication
+        header or cookie is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: 64-char hex token from the invite email
+      responses:
+        "200":
+          description: "Invite accepted; `Set-Cookie: session=…` issued"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      user_id: { type: string, format: uuid }
+                      email: { type: string, format: email }
+                      license_id: { type: string, format: uuid }
+                      product_name: { type: string }
+                      role: { type: string, enum: [admin, member] }
+        "404":
+          description: Invalid, expired, already-used, or removed token (`SEAT_INVITE_INVALID`)
+        "429":
+          description: Rate limit exceeded
+
+  /license/floating/checkout:
+    post:
+      tags: [Floating]
+      summary: Checkout a floating session
+      description: |
+        Acquires a concurrent session slot. The session expires after the plan's
+        `floating_timeout` (default 30 minutes) unless refreshed via heartbeat.
+
+        - Atomic: concurrent checkouts will never exceed `max_activations`
+        - Re-checkout with the same identifier refreshes the existing session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, identifier]
+              properties:
+                license_key:
+                  type: string
+                identifier:
+                  type: string
+                  example: "workstation-001"
+                label:
+                  type: string
+      responses:
+        "200":
+          description: Session checked out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingCheckoutResponse"
+        "409":
+          description: All sessions in use
+
+  /license/floating/checkin:
+    post:
+      tags: [Floating]
+      summary: Release a floating session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, identifier]
+              properties:
+                license_key:
+                  type: string
+                identifier:
+                  type: string
+      responses:
+        "200":
+          description: Session released
+
+  /license/floating/heartbeat:
+    post:
+      tags: [Floating]
+      summary: Extend a floating session
+      description: Refreshes the session expiry. Call periodically to keep the session alive.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, identifier]
+              properties:
+                license_key:
+                  type: string
+                identifier:
+                  type: string
+      responses:
+        "200":
+          description: Session extended
+
+  /license/download:
+    post:
+      tags: [Releases]
+      summary: Get a license-gated download URL
+      description: |
+        Returns a short-lived presigned URL for the artifact matching
+        `(product, channel, platform, version?)`. Used for manual /
+        gated downloads — the auto-update path uses the public feed
+        endpoints below (no per-call license check).
+
+        If `version` is omitted, returns the latest published release
+        in the channel that has an artifact for `platform`. Channel
+        fallback chain applies (beta sees beta + stable, etc.).
+
+        Perpetual licenses with a maintenance period (`updates_until`
+        in the verify response) may only install releases published
+        before that date. Pinning a later version answers 403
+        `UPDATES_EXPIRED`; without a pin, "latest" is the newest
+        release published inside the period. The feed endpoints apply
+        the same limit when called with the license key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [license_key, platform]
+              properties:
+                license_key:
+                  type: string
+                platform:
+                  type: string
+                  enum:
+                    [
+                      darwin-arm64,
+                      darwin-x64,
+                      windows-arm64,
+                      windows-x64,
+                      linux-arm64,
+                      linux-x64,
+                      linux-armhf,
+                    ]
+                version:
+                  type: string
+                  description: "Optional. Empty = latest in channel."
+                  example: "1.2.3"
+                channel:
+                  type: string
+                  enum: [stable, beta, alpha, dev]
+                  default: stable
+      responses:
+        "200":
+          description: Signed download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                      expires_at:
+                        type: string
+                        format: date-time
+                      version:
+                        type: string
+                      platform:
+                        type: string
+                      sha256:
+                        type: string
+                      file_size:
+                        type: integer
+                        format: int64
+        "400":
+          description: Invalid platform / channel
+        "403":
+          description: |
+            `UPDATES_EXPIRED` — the requested release was published
+            after the license's maintenance period ended.
+        "404":
+          description: License not found or no release matches
+        "410":
+          description: Specifically-requested version was yanked
+        "503":
+          description: Storage not configured on this server
+
+  /releases/{product_slug}/feed.xml:
+    get:
+      tags: [Releases]
+      summary: Sparkle appcast (per-platform)
+      description: |
+        Sparkle-compatible XML appcast. Stable channel is public
+        (no auth); non-stable channels are also public — internal
+        / customer-specific builds belong on internal CI/CD
+        distribution, not these feeds.
+
+        When the product has a minimum_supported_version, every item at
+        or above it carries <sparkle:criticalUpdate sparkle:version="…"/>
+        with that version: Sparkle treats the update as critical for apps
+        whose CFBundleVersion is lower. Feeds limited by an update period
+        lower the version to the newest release the license may install.
+      parameters:
+        - $ref: "#/components/parameters/ProductSlug"
+        - $ref: "#/components/parameters/Platform"
+        - $ref: "#/components/parameters/Channel"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/LicenseKey"
+        - $ref: "#/components/parameters/LicenseToken"
+      responses:
+        "200":
+          description: Sparkle XML appcast
+          content:
+            application/xml: {}
+        "401":
+          description: "`LICENSE_KEY_REQUIRED` — the product requires the license token (or key) on its feeds"
+        "400":
+          description: Invalid platform / channel / limit
+        "404":
+          description: Unknown product_slug
+
+  /releases/{product_slug}/feed.json:
+    get:
+      tags: [Releases]
+      summary: Velopack feed (per-platform)
+      description: |
+        The same feed as /releases/{product_slug}/velopack/releases.{channel}.json,
+        addressed by platform and channel parameters. Velopack's client
+        cannot build this URL; give it the velopack base URL instead.
+      parameters:
+        - $ref: "#/components/parameters/ProductSlug"
+        - $ref: "#/components/parameters/Platform"
+        - $ref: "#/components/parameters/Channel"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/LicenseKey"
+        - $ref: "#/components/parameters/LicenseToken"
+      responses:
+        "200":
+          description: Velopack asset feed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelopackFeed"
+        "401":
+          description: "`LICENSE_KEY_REQUIRED` — the product requires the license token (or key) on its feeds"
+        "400":
+          description: Invalid platform / channel / limit
+        "404":
+          description: Unknown product_slug
+
+  /releases/{product_slug}/velopack/{platform}/{file}:
+    get:
+      tags: [Releases]
+      summary: Velopack feed and package downloads, at the URLs Velopack builds
+      description: |
+        Give Velopack's UpdateManager the base URL
+        /api/v1/releases/{product_slug}/velopack/{platform}. It requests
+        releases.{channel}.json under it, then downloads each package as
+        {base}/{FileName}, which this route answers with a 302 to storage.
+
+        The platform segment may be left out
+        (/releases/{product_slug}/velopack/{file}). The platform then comes
+        from a channel named after a runtime (win-x64, win-x64-beta), or
+        from the rid the C# client sends, which is the machine's runtime
+        rather than the app's. Velopack's Rust core, used by its Rust,
+        Node.js, Python and C++ SDKs, sends no rid.
+
+        Channels: Velopack's default channels win, osx and linux read
+        stable; stable, beta, alpha and dev read that channel; a runtime
+        name with a trailing channel (osx-arm64-beta) reads that channel.
+
+        Gated feeds: the C# client keeps the base URL's query on both
+        requests, so license_token can go there. The Rust core replaces
+        the query; send X-License-Token or X-License-Key instead.
+      parameters:
+        - $ref: "#/components/parameters/ProductSlug"
+        - name: platform
+          in: path
+          required: true
+          description: Keygate platform, such as windows-x64 or darwin-arm64
+          schema:
+            type: string
+        - name: file
+          in: path
+          required: true
+          description: releases.{channel}.json, or a package FileName from the feed
+          schema:
+            type: string
+        - name: rid
+          in: query
+          description: .NET runtime identifier sent by the C# client, used only without a platform
+          schema:
+            type: string
+        - $ref: "#/components/parameters/LicenseToken"
+      responses:
+        "200":
+          description: Velopack asset feed (for releases.{channel}.json)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelopackFeed"
+        "302":
+          description: Redirect to the package in storage (for a package FileName)
+        "401":
+          description: "`LICENSE_KEY_REQUIRED` — the product requires the license token (or key) on its feeds"
+        "400":
+          description: Unknown platform, or no platform from the path, the channel name or rid
+        "404":
+          description: Unknown product_slug, or no such release
+
+  /releases/{product_slug}/upgrade.json:
+    get:
+      tags: [Releases]
+      summary: Tauri updater manifest (latest only)
+      description: |
+        Returns the single latest release. The signature is what a Tauri
+        `.sig` file holds: a base64 encoded minisign signature with a
+        trusted comment (timestamp, file and version) and a global
+        signature, verifiable with the product's Tauri public key from
+        GET /admin/products/{id}/signing-key/tauri-pubkey.
+        Embeds `minimum_supported_version` + `minimum_supported_message`
+        when the product has them configured.
+      parameters:
+        - $ref: "#/components/parameters/ProductSlug"
+        - $ref: "#/components/parameters/Platform"
+        - $ref: "#/components/parameters/Channel"
+        - $ref: "#/components/parameters/LicenseKey"
+        - $ref: "#/components/parameters/LicenseToken"
+      responses:
+        "200":
+          description: Tauri manifest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                  pub_date:
+                    type: string
+                    format: date-time
+                  url:
+                    type: string
+                    format: uri
+                  signature:
+                    type: string
+                    description: base64 encoded minisign signature file, as in a Tauri .sig file. Empty when the release is unsigned.
+                  notes:
+                    type: string
+                  minimum_supported_version:
+                    type: string
+                  minimum_supported_message:
+                    type: string
+        "204":
+          description: No published release yet for this channel/platform
+        "401":
+          description: "`LICENSE_KEY_REQUIRED` — the product requires the license token (or key) on its feeds"
+        "400":
+          description: Invalid platform / channel
+        "404":
+          description: Unknown product_slug
+
+components:
+  parameters:
+    ProductSlug:
+      in: path
+      name: product_slug
+      required: true
+      schema: { type: string }
+      example: my-app
+    Platform:
+      in: query
+      name: platform
+      required: true
+      schema:
+        type: string
+        enum:
+          [
+            darwin-arm64,
+            darwin-x64,
+            windows-arm64,
+            windows-x64,
+            linux-arm64,
+            linux-x64,
+            linux-armhf,
+          ]
+    Channel:
+      in: query
+      name: channel
+      schema:
+        type: string
+        enum: [stable, beta, alpha, dev]
+        default: stable
+    LicenseKey:
+      in: header
+      name: X-License-Key
+      required: false
+      schema: { type: string }
+      description: |
+        Optional, and header-only: the key is a long-lived credential
+        that also opens activate, verify and download, and one placed
+        in the URL is written to CDN, proxy and access logs before the
+        request arrives. A feed called with a `license_key` query
+        parameter answers 400 — use `license_token` there instead.
+        Identifies the installation's license. A perpetual license with a
+        maintenance period then sees only releases published before
+        its `updates_until`; other licenses see the full feed. An
+        unknown or unusable key answers 404, so the gate cannot be
+        skipped by dropping the key. A product must set
+        `feed_license_required` before any of its plans can sell an
+        update period or renewals; its feeds then answer 401
+        `LICENSE_KEY_REQUIRED` without a key or token. Turning it on
+        is a rollout, in this order: ship an updater that sends the
+        license, set the flag, wait out the links the public feed
+        already handed out (the admin API says how long), and only
+        then give a plan an update period. Other products keep a
+        public, ungated feed.
+
+        An updater that cannot set headers uses `license_token`.
+    LicenseToken:
+      in: query
+      name: license_token
+      required: false
+      schema: { type: string }
+      description: |
+        The only credential accepted in the URL, and what updaters
+        that can only put things there use (Sparkle's
+        `feedParametersForUpdater`).
+        The signed token from `/license/verify` or `/license/activate`
+        (also accepted as an `X-License-Token` header): it identifies
+        the same license, expires with the plan's `token_ttl_days`,
+        and is accepted on the feeds only. The period comes from the
+        license as it reads now, not from the token, so a renewal or a
+        revocation takes effect at once. An invalid, expired or
+        unusable token answers 404, like an unknown key.
+    Limit:
+      in: query
+      name: limit
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Admin API key (`kg_live_…`). Used for server-to-server
+        access to `/admin/*` (NOT for public SDK endpoints in this
+        document). Requires the `admin` scope. Mint in dashboard.
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+      description: |
+        Portal session cookie issued by `/auth/otp/verify`,
+        `/auth/dev-login`, or `/invites/accept`. Required for
+        `/portal/*` endpoints. The cookie is HttpOnly + SameSite=Lax;
+        browsers attach it automatically.
+
+  schemas:
+    VelopackFeed:
+      type: object
+      description: Velopack's VelopackAssetFeed. SHA256 is upper case hex, as Velopack compares it.
+      properties:
+        Assets:
+          type: array
+          items:
+            type: object
+            properties:
+              PackageId: { type: string }
+              Version: { type: string }
+              Type: { type: string, enum: [Full] }
+              FileName: { type: string, description: "{version}_{channel}_{platform}.nupkg, downloaded from the velopack base URL" }
+              SHA256: { type: string }
+              Size: { type: integer, format: int64 }
+              NotesMarkdown: { type: string }
+    ActivateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [activated, already_activated]
+            license_id:
+              type: string
+              format: uuid
+            token:
+              type: string
+              description: |
+                Ed25519-signed offline verification token. Format:
+                `<base64url-payload>.<base64url-signature>`. Verify
+                using the server's public key from /license/pubkey.
+                Payload fields are listed under VerifyResponse.
+
+    VerifyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [active, trialing, past_due, canceled, expired, suspended, revoked]
+            plan_id:
+              type: string
+            plan_name:
+              type: string
+            valid_until:
+              type: string
+              format: date-time
+              nullable: true
+            updates_until:
+              type: string
+              format: date-time
+              description: |
+                End of a perpetual license's maintenance period. The
+                license stays valid after this date, but releases
+                published later cannot be installed; the signed token
+                carries the same instant as `upd`. Absent when the
+                license has no separate limit (subscriptions, trials,
+                perpetual plans with updates for life).
+            features:
+              type: object
+              description: "Key-value map of feature entitlements"
+              example:
+                premium_support: true
+                api_calls: "50000"
+                storage_gb: "100"
+            token:
+              type: string
+              description: |
+                Ed25519-signed offline verification token,
+                `<base64url-payload>.<base64url-signature>`; the
+                signed bytes are the base64url payload string. The
+                payload is a JSON object with these fields (all
+                times are unix seconds):
+
+                | field | meaning |
+                |---|---|
+                | `lid`, `pid`, `pln` | license, product, plan ids |
+                | `sts` | license status at issue time |
+                | `did` | the identifier the token was issued for |
+                | `fpr` | SHA-256 of identifier + product id, for device binding |
+                | `ftr` | feature entitlements, same as `features` |
+                | `iat`, `exp` | issued at; how long the client may stay offline before verifying again. `exp` is a check-in interval, not the license term |
+                | `vun` | when the license itself lapses; absent = perpetual |
+                | `upd` | end of the maintenance period: install only releases published at or before this instant; absent = no separate limit |
+                | `grc` | grace days after `vun` |
+                | `nce` | per-issuance nonce |
+
+                A client that ships updates through its own channel
+                must compare the release's publish date against `upd`
+                itself; the server's feeds and download endpoint apply
+                the same rule when given the license key.
+            grace_days:
+              type: integer
+
+    EntitlementResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            licensed:
+              type: boolean
+            status:
+              type: string
+            plan_id:
+              type: string
+            plan_name:
+              type: string
+            features:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  value_type:
+                    type: string
+                    enum: [bool, int, string, quota, flag]
+                  value:
+                    type: string
+                  used:
+                    type: integer
+                    nullable: true
+                  limit:
+                    type: integer
+                    nullable: true
+                  remaining:
+                    type: integer
+                    nullable: true
+                  period:
+                    type: string
+                  resets_at:
+                    type: string
+                    format: date-time
+
+    UsageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            accepted:
+              type: boolean
+            used:
+              type: integer
+              example: 451
+            limit:
+              type: integer
+              example: 1000
+            remaining:
+              type: integer
+              example: 549
+            period:
+              type: string
+              example: monthly
+            period_key:
+              type: string
+              example: "2026-03"
+
+    QuotaStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            feature:
+              type: string
+            used:
+              type: integer
+            limit:
+              type: integer
+            remaining:
+              type: integer
+            period:
+              type: string
+            period_key:
+              type: string
+
+    FloatingCheckoutResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            session_id:
+              type: string
+              format: uuid
+            expires_at:
+              type: string
+              format: date-time
+            active_sessions:
+              type: integer
+            max_sessions:
+              type: integer
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: QUOTA_EXCEEDED
+            message:
+              type: string
+              example: "usage quota exceeded for api_calls"
+            details:
+              type: object
+              nullable: true

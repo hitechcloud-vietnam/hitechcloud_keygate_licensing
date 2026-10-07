@@ -1,0 +1,2 @@
+-- Data-only migration: the cleared intervals were descriptive and are
+-- not restored.
