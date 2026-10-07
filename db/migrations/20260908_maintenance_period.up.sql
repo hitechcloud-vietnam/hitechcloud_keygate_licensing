@@ -16,7 +16,7 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS updates_days INT NOT NULL DEFAULT 0;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS renewal_days INT NOT NULL DEFAULT 0;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS stripe_renewal_price_id TEXT NOT NULL DEFAULT '';
 -- Every period a plan has sold, with the instant it took effect.
--- Keygate's own checkout freezes the period in the session, but a
+-- HiTechCloud's own checkout freezes the period in the session, but a
 -- Stripe Payment Link the merchant made carries no terms; for one of
 -- those this is what says which period the buyer was shown, however
 -- many times the plan has been edited since. One row per plan is

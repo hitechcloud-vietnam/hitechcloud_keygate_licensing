@@ -352,7 +352,7 @@ func TestValidateTarget(t *testing.T) {
 		url     string
 		private bool
 	}{
-		{"https://hooks.example.com/keygate", false},
+		{"https://hooks.example.com/hitechcloud", false},
 		{"https://hooks.example.com:8443/x", false},
 		{"http://localhost:3000/hook", true},
 		{"http://127.0.0.1/hook", true},

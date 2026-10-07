@@ -63,7 +63,7 @@ func TestDemoteOwnerAtomic_RaceTwoOwners(t *testing.T) {
 
 		// Invariant: count owners *for these two emails* — exactly one
 		// of {emailA, emailB} must still hold role='owner'. Scoped by
-		// email so other tests' owners (admin@keygate.dev seeded by
+		// email so other tests' owners (admin@hitechcloud.vn seeded by
 		// dev-login) don't pollute the count.
 		var remaining int
 		if err := s.DB.NewRaw(

@@ -33,13 +33,13 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
       -X github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/version.Version=${VERSION} \
       -X github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/version.Commit=${COMMIT} \
       -X github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/version.BuildDate=${BUILD_DATE}" \
-    -o /keygate ./cmd/server
+    -o /hitechcloud ./cmd/server
 
 # ── Runtime ──
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata curl
 WORKDIR /app
-COPY --from=backend /keygate /usr/local/bin/keygate
+COPY --from=backend /hitechcloud /usr/local/bin/hitechcloud
 COPY --from=backend /app/db/migrations /app/db/migrations
 COPY --from=backend /app/web/dist /app/web/dist
 COPY --from=backend /app/docs /app/docs
@@ -53,4 +53,4 @@ LABEL org.opencontainers.image.title="HiTechCloud Software License & Commerce Pl
 
 EXPOSE 9000
 ENV PORT=9000
-ENTRYPOINT ["keygate"]
+ENTRYPOINT ["hitechcloud"]

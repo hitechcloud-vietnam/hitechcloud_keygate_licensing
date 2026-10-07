@@ -29,8 +29,8 @@ ALTER TABLE api_keys
 
 -- ─── 2. licenses.external_customer_id / external_workspace_id ──
 -- External identifiers let merchants map their own user/workspace
--- model onto Keygate licenses without an intermediate mapping table.
--- Both are opaque strings — Keygate doesn't interpret the contents.
+-- model onto HiTechCloud licenses without an intermediate mapping table.
+-- Both are opaque strings — HiTechCloud doesn't interpret the contents.
 -- Indexes are partial (empty-string excluded) so the common "no
 -- external id" case doesn't bloat the index.
 ALTER TABLE licenses
@@ -98,7 +98,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_seats_invite_token_hash
 -- Stripe v82 SDK exposes only the Billing Meter API. Each event
 -- carries event_name (which meter), customer, value, and an
 -- idempotency identifier. Three additive changes:
---   - entitlements.stripe_meter_event_name: maps Keygate feature to
+--   - entitlements.stripe_meter_event_name: maps HiTechCloud feature to
 --     the Stripe meter the merchant configured.
 --   - metered_billing event-log shape: identifier column + drop old
 --     aggregate UNIQUE (now one row per RecordUsage).

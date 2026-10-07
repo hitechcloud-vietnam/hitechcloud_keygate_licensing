@@ -1,4 +1,4 @@
--- Keygate: License Management Platform
+-- HiTechCloud: License Management Platform
 -- Migration: initial schema
 
 -- ─── Users & OAuth ───
