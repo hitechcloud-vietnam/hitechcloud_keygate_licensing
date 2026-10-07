@@ -28,12 +28,12 @@ func TestSessionCookieSecureFollowsTheRequestScheme(t *testing.T) {
 	}{
 		{"plain http, production", "production", "http://box.local:9000", false, "", false},
 		{"plain http, development", "development", "http://localhost:9000", false, "", false},
-		{"https, production", "production", "https://keygate.example.com", true, "", true},
-		{"https, staging", "staging", "https://keygate.example.com", true, "", true},
-		{"behind a TLS proxy", "production", "http://keygate.internal:9000", false, "https", true},
+		{"https, production", "production", "https://hitechcloud.example.com", true, "", true},
+		{"https, staging", "staging", "https://hitechcloud.example.com", true, "", true},
+		{"behind a TLS proxy", "production", "http://hitechcloud.internal:9000", false, "https", true},
 		{"proxy chain, browser used TLS", "production", "http://x:9000", false, "https, http", true},
 		{"proxy chain, browser used http", "production", "http://x:9000", false, "http, https", false},
-		{"https BASE_URL, silent proxy", "production", "https://keygate.example.com", false, "", true},
+		{"https BASE_URL, silent proxy", "production", "https://hitechcloud.example.com", false, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &AuthHandler{Config: &config.Config{Environment: tc.env, BaseURL: tc.baseURL}}

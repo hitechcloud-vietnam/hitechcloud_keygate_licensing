@@ -121,7 +121,7 @@ func (h *SystemHandler) fetchLatestRelease() *updateInfo {
 		return info
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "Keygate/"+version.Version)
+	req.Header.Set("User-Agent", "HiTechCloud/"+version.Version)
 
 	resp, err := client.Do(req)
 	if err != nil {

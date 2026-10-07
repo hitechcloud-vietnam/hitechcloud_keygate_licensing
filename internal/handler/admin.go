@@ -1452,7 +1452,7 @@ func (h *AdminHandler) stripePricesTaken(c *gin.Context, purchasePrice, renewalP
 }
 
 // stripePriceTaken rejects a Stripe price already mapped to another
-// plan. Checkout sessions created outside Keygate (Payment Links)
+// plan. Checkout sessions created outside HiTechCloud (Payment Links)
 // resolve their plan by price alone, so the mapping must be unique.
 // Writes the 409 response itself and reports whether it did.
 func (h *AdminHandler) stripePriceTaken(c *gin.Context, priceID, exceptPlanID string) bool {
@@ -1989,7 +1989,7 @@ func (h *AdminHandler) CreateLicense(c *gin.Context) {
 		response.BadRequest(c, appErr.Message)
 		return
 	}
-	// External IDs are opaque to Keygate but we cap their length to
+	// External IDs are opaque to HiTechCloud but we cap their length to
 	// keep them index-friendly. 256 chars is comfortably above what
 	// any real identifier scheme produces (UUIDs, Stripe IDs, etc).
 	if len(req.ExternalCustomerID) > 256 {
@@ -4028,8 +4028,8 @@ func (h *AdminHandler) SendTestEmail(c *gin.Context) {
 		return
 	}
 	if err := h.Email.Send(to,
-		"Keygate test email",
-		`<p>Hello! This is a test email from Keygate.</p>`+
+		"HiTechCloud test email",
+		`<p>Hello! This is a test email from HiTechCloud.</p>`+
 			`<p>If you can read this, your SMTP setup is working.</p>`); err != nil {
 		response.Err(c, http.StatusBadGateway, "EMAIL_SEND_FAILED", err.Error())
 		return
@@ -4153,11 +4153,11 @@ func (h *AdminHandler) InviteTeamMember(c *gin.Context) {
 	// does NOT roll back the role grant (OTP login still works
 	// out-of-band). The inviter (actor) name is shown so the
 	// recipient knows who added them, which helps spot social
-	// engineering ("why am I suddenly admin on Keygate?").
+	// engineering ("why am I suddenly admin on HiTechCloud?").
 	if roleChanged && h.Email != nil {
 		siteName, _ := h.Store.GetSetting(c, "site_name")
 		if siteName == "" {
-			siteName = "Keygate"
+			siteName = "HiTechCloud"
 		}
 		baseURL, _ := h.Store.GetSetting(c, "base_url")
 		if baseURL == "" {
@@ -4261,7 +4261,7 @@ func (h *AdminHandler) ExportLicenses(c *gin.Context) {
 	}
 
 	// The export deliberately carries plaintext keys — that is its
-	// purpose, e.g. migrating off Keygate. But it is a bulk credential
+	// purpose, e.g. migrating off HiTechCloud. But it is a bulk credential
 	// dump, so unlike a single reveal it must leave a trace of who
 	// pulled it and how much.
 	h.Store.Audit(c, &model.AuditLog{
@@ -4291,7 +4291,7 @@ func (h *AdminHandler) ExportLicenses(c *gin.Context) {
 			ValidUntil string `json:"valid_until"`
 			// UpdatesUntil is the end of a perpetual license's
 			// maintenance period; empty means no separate limit. The
-			// export exists to migrate off Keygate, so an entitlement
+			// export exists to migrate off HiTechCloud, so an entitlement
 			// the license actually has must travel with it.
 			UpdatesUntil string `json:"updates_until"`
 			CreatedAt    string `json:"created_at"`

@@ -1,4 +1,4 @@
-# Keygate — AI Agent Instructions
+# HiTechCloud Software License & Commerce Platform — AI Agent Instructions
 
 ## LEGAL — AGPL v3 Attribution (MANDATORY)
 

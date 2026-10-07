@@ -397,7 +397,7 @@ func (h *ReleasePublicHandler) FeedVelopack(c *gin.Context) {
 // optionally ending in a platform) and requests releases.{channel}.json
 // under it. The C# client adds rid and keeps the base URL's query; the
 // Rust core replaces the query with localVersion, id and stagingId. The
-// Keygate channel comes from the file name unless a channel query
+// HiTechCloud channel comes from the file name unless a channel query
 // parameter is given.
 func (h *ReleasePublicHandler) FeedVelopackIndex(c *gin.Context) {
 	// {base}/{file}, where the base URL may end in a platform:
@@ -440,7 +440,7 @@ func (h *ReleasePublicHandler) FeedVelopackIndex(c *gin.Context) {
 		platform = service.VelopackPlatform(q.Get("rid"))
 	}
 	if platform == "" {
-		response.BadRequest(c, "no platform: end the Velopack base URL with one, such as /velopack/windows-x64, or send a rid Keygate serves")
+		response.BadRequest(c, "no platform: end the Velopack base URL with one, such as /velopack/windows-x64, or send a rid HiTechCloud serves")
 		return
 	}
 	q.Set("platform", platform)

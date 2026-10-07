@@ -47,14 +47,14 @@ func TestIsProduction(t *testing.T) {
 }
 
 func TestIsAdminEmail(t *testing.T) {
-	c := &Config{AdminEmails: []string{"admin@keygate.dev", "boss@company.com"}}
+	c := &Config{AdminEmails: []string{"admin@hitechcloud.vn", "boss@company.com"}}
 
 	tests := []struct {
 		email string
 		want  bool
 	}{
-		{"admin@keygate.dev", true},
-		{"ADMIN@KEYGATE.DEV", true},
+		{"admin@hitechcloud.vn", true},
+		{"ADMIN@HITECHCLOUD.VN", true},
 		{"boss@company.com", true},
 		{"user@other.com", false},
 		{"", false},
@@ -100,7 +100,7 @@ func TestValidateSecurityDefaults(t *testing.T) {
 				LicenseSigningKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			}
 		}
-		const want = "SECURITY: BASE_URL is not https — session cookies travel unprotected; put TLS in front of Keygate"
+		const want = "SECURITY: BASE_URL is not https — session cookies travel unprotected; put TLS in front of HiTechCloud"
 		warned := func(url string) bool {
 			warnings, fatal := base(url).ValidateSecurityDefaults()
 			if len(fatal) > 0 {
@@ -111,7 +111,7 @@ func TestValidateSecurityDefaults(t *testing.T) {
 		// A remote install over plain HTTP is the one that cannot log
 		// anybody in: the browser drops a Secure cookie, and without
 		// it the session travels in the clear.
-		if !warned("http://keygate.example.com") {
+		if !warned("http://hitechcloud.example.com") {
 			t.Error("no warning for a plain-http production install")
 		}
 		// Loopback is trustworthy to browsers, so a local trial is
@@ -119,7 +119,7 @@ func TestValidateSecurityDefaults(t *testing.T) {
 		if warned("http://localhost:9000") || warned("http://127.0.0.1:9000") {
 			t.Error("warned about a loopback BASE_URL")
 		}
-		if warned("https://keygate.example.com") {
+		if warned("https://hitechcloud.example.com") {
 			t.Error("warned about an https BASE_URL")
 		}
 	})

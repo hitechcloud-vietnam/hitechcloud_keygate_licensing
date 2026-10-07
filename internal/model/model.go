@@ -283,7 +283,7 @@ type Entitlement struct {
 	// StripeMeterEventName: the Stripe Billing Meter event_name to
 	// emit on each RecordUsage call. Configured per-meter in the
 	// merchant's Stripe dashboard. Empty disables metered sync for
-	// the feature (Keygate-internal quota only).
+	// the feature (HiTechCloud-internal quota only).
 	StripeMeterEventName string `bun:",notnull,default:''" json:"stripe_meter_event_name,omitempty"`
 }
 
@@ -363,7 +363,7 @@ type License struct {
 	OrgName   string     `json:"org_name,omitempty"`
 
 	// External identifiers — opaque strings owned by the merchant.
-	// Used to map Keygate licenses to the merchant's own user/tenant
+	// Used to map HiTechCloud licenses to the merchant's own user/tenant
 	// model without a separate mapping table on their side.
 	ExternalCustomerID  string `bun:",notnull,default:''" json:"external_customer_id,omitempty"`
 	ExternalWorkspaceID string `bun:",notnull,default:''" json:"external_workspace_id,omitempty"`
@@ -601,7 +601,7 @@ type LicenseAddon struct {
 // ─── Plan Update Terms ───
 //
 // One row per period a plan has sold, with the instant it took
-// effect. A checkout Keygate created carries the period it was sold
+// effect. A checkout HiTechCloud created carries the period it was sold
 // at; a Stripe Payment Link the merchant made carries nothing, and
 // this is what tells fulfilment which period the buyer was shown.
 type PlanUpdateTerms struct {
@@ -766,7 +766,7 @@ func RenewedUpdatesUntil(current *time.Time, now time.Time, days int) time.Time 
 // total) — Stripe's Billing Meter API accumulates server-side per
 // customer + event_name.
 //
-// Identifier is the stable token Keygate hands to Stripe as the
+// Identifier is the stable token HiTechCloud hands to Stripe as the
 // meter event's `identifier` field; Stripe dedupes retries over a
 // rolling 24-hour window using it, so our sync job can call as
 // many times as it wants without double-counting.

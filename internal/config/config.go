@@ -301,7 +301,7 @@ func (c *Config) ValidateSecurityDefaults() (warnings []string, fatal []string) 
 		// next request. Anything more than a local trial belongs
 		// behind TLS.
 		if !strings.HasPrefix(strings.ToLower(c.BaseURL), "https://") && !isLoopbackURL(c.BaseURL) {
-			warnings = append(warnings, "SECURITY: BASE_URL is not https — session cookies travel unprotected; put TLS in front of Keygate")
+			warnings = append(warnings, "SECURITY: BASE_URL is not https — session cookies travel unprotected; put TLS in front of HiTechCloud")
 		}
 	}
 

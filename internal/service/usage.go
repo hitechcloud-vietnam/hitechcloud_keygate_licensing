@@ -110,7 +110,7 @@ func (s *UsageService) RecordUsage(ctx context.Context, in RecordUsageInput) (*R
 	// rows to Stripe's Billing Meter API; pushing absolutes here
 	// would double-count because Stripe accumulates server-side.
 	//
-	// Best-effort: a failure here doesn't roll back the in-Keygate
+	// Best-effort: a failure here doesn't roll back the in-HiTechCloud
 	// accounting (we'd rather over-grant than under-bill on a
 	// transient blip; the next RecordUsage isn't affected).
 	if quota.StripeMeterEventName != "" {

@@ -59,7 +59,7 @@ func TauriSignature(priv ed25519.PrivateKey, sig []byte, trustedComment string) 
 	}
 	keyID := tauriKeyID(priv.Public().(ed25519.PublicKey))
 	global := ed25519.Sign(priv, append(append([]byte{}, sig...), trustedComment...))
-	text := "untrusted comment: signature from keygate\n" +
+	text := "untrusted comment: signature from hitechcloud\n" +
 		base64.StdEncoding.EncodeToString(append(append([]byte("Ed"), keyID[:]...), sig...)) + "\n" +
 		"trusted comment: " + trustedComment + "\n" +
 		base64.StdEncoding.EncodeToString(global) + "\n"

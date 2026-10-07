@@ -19,7 +19,7 @@ const (
 	FeedFormatSparkle  FeedFormat = "sparkle"
 	FeedFormatVelopack FeedFormat = "velopack"
 	FeedFormatTauri    FeedFormat = "tauri"
-	FeedFormatJSON     FeedFormat = "json" // Keygate-native debug format
+	FeedFormatJSON     FeedFormat = "json" // HiTechCloud-native debug format
 )
 
 // IsValidFeedFormat reports whether f is one of the supported formats.
@@ -39,7 +39,7 @@ func IsValidFeedFormat(f FeedFormat) bool {
 type FeedInput struct {
 	ProductID   string
 	ProductName string
-	BaseURL     string // public origin, e.g. https://keygate.app — used for atom links
+	BaseURL     string // public origin, e.g. https://hitechcloud.vn — used for atom links
 	Releases    []*FeedRelease
 
 	// MinimumSupportedVersion: optional product-level version floor.
@@ -267,7 +267,7 @@ func ParseVelopackFileName(name string) (version, channel, platform string, ok b
 }
 
 // VelopackPlatform maps a .NET runtime identifier, which Velopack sends
-// as rid, to a Keygate platform. "" when it is not one Keygate serves.
+// as rid, to a HiTechCloud platform. "" when it is not one HiTechCloud serves.
 func VelopackPlatform(rid string) string {
 	switch strings.ToLower(rid) {
 	case "win-x64":
@@ -289,12 +289,12 @@ func VelopackPlatform(rid string) string {
 }
 
 // VelopackChannel maps the channel in releases.{channel}.json to a
-// Keygate channel, and to a platform when the name carries one.
+// HiTechCloud channel, and to a platform when the name carries one.
 // Velopack's default channels are the OS names (win, osx, linux), which
 // mean stable here; a package built with --channel beta (or alpha, dev,
-// stable) reads that Keygate channel. Velopack's docs name a channel per
+// stable) reads that HiTechCloud channel. Velopack's docs name a channel per
 // runtime when an app ships several architectures, such as win-x64 or
-// win-x64-beta: the runtime picks the platform and a trailing Keygate
+// win-x64-beta: the runtime picks the platform and a trailing HiTechCloud
 // channel name picks the channel.
 func VelopackChannel(name string) (channel, platform string) {
 	name = strings.ToLower(name)
@@ -324,7 +324,7 @@ func VelopackChannel(name string) (channel, platform string) {
 
 // TauriManifest is the single-release JSON Tauri's updater consumes.
 //
-// MinimumSupportedVersion + MinimumSupportedMessage are Keygate
+// MinimumSupportedVersion + MinimumSupportedMessage are HiTechCloud
 // extensions: clients we ship with the official SDK refuse to run an
 // installed build below this version. Tauri itself ignores unknown
 // fields, so adding them is forward-compatible.

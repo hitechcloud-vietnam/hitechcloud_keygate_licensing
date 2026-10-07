@@ -102,7 +102,7 @@ func newReminderFixture(t *testing.T) *reminderFixture {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	c := NewExpiryChecker(s, NewEmailService("127.0.0.1", strconv.Itoa(port), "", "", "keygate@test.local", slog.Default(), s), nil, slog.Default())
+	c := NewExpiryChecker(s, NewEmailService("127.0.0.1", strconv.Itoa(port), "", "", "hitechcloud@test.local", slog.Default(), s), nil, slog.Default())
 	return &reminderFixture{t: t, s: s, c: c, plan: plan, prod: prod}
 }
 

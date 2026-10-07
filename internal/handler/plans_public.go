@@ -23,7 +23,7 @@ import (
 // session, which is no use to an anonymous visitor deciding whether to
 // buy.
 //
-// Price is not a Keygate column: the Stripe Price is the source of
+// Price is not a HiTechCloud column: the Stripe Price is the source of
 // truth (payment.CheckoutByPlan reads it at checkout time), so this
 // handler asks Stripe and caches the answer. Without the cache every
 // anonymous page load would fan out one Stripe call per plan, which is
