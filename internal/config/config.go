@@ -56,6 +56,11 @@ type Config struct {
 	WebhookAllowPrivate   bool
 	QuotaWarningThreshold float64
 
+	// LogLevel is the slog level for the JSON stdout handler
+	// (debug | info | warn | error). Catalog key observability.log_level;
+	// config-in-DB wins at boot.
+	LogLevel string
+
 	SMTPHost     string
 	SMTPPort     string
 	SMTPUsername string
@@ -237,6 +242,7 @@ func Load() (*Config, error) {
 	cfg.WebhookHTTPTimeout = envOr("WEBHOOK_HTTP_TIMEOUT", "10s")
 	cfg.WebhookAllowPrivate = strings.EqualFold(os.Getenv("WEBHOOK_ALLOW_PRIVATE"), "true")
 	cfg.QuotaWarningThreshold = envFloatOr("QUOTA_WARNING_THRESHOLD", 0.8)
+	cfg.LogLevel = envOr("LOG_LEVEL", "info")
 
 	if admins := os.Getenv("ADMIN_EMAILS"); admins != "" {
 		for e := range strings.SplitSeq(admins, ",") {

@@ -116,6 +116,20 @@ values are masked in every response).
 `JWT_SECRET`, `LICENSE_SIGNING_KEY`, `SECRET_ENCRYPTION_KEY`,
 `RELEASE_KEY_ENCRYPTION_KEY`, `REFERRAL_HASH_SALT`, `REDIS_URL`.
 
+**Boot overlay vs live seams.** At boot, `ConfigService.ApplyBootOverlay`
+copies effective values onto the runtime `config.Config` for every key with a
+boot-time consumer (rate limits, brute-force, webhook, storage, SMTP, quota,
+Stripe, `observability.log_level`), so the settings table wins over the
+environment without any code reading env directly. Keys marked
+restart-required apply at the next boot; the live-scoped keys (payment gateway
+credentials, domains, `session_cookie_domain`, retention, branding, SMTP
+delivery) are re-read per use and take effect immediately. A key explicit in
+neither the database nor the environment leaves the env-loaded value alone.
+
+`.env.example` is the complete environment reference: every catalog env var
+and bootstrap var is documented there, and `internal/config/env_example_test.go`
+fails the build if the two ever drift apart.
+
 ## Email queue
 
 Outbound mail is queued into `email_queue` (`store.EnqueueEmail`), processed in

@@ -258,7 +258,17 @@ func main() {
 	}
 	defer db.Close()
 
-	logger := newLogger(os.Stdout)
+	// Config-in-DB boot overlay (plan §67 evolution): the settings
+	// table wins over the environment for every catalog key that
+	// configures a boot-time consumer (rate limits, webhook, storage,
+	// SMTP, quota, Stripe…). Must run before the services below are
+	// constructed. Live-scoped keys (payment gateway credentials,
+	// domains, session cookie domain, retention…) re-read per use.
+	cfgsvc := service.NewConfigService(db)
+	cfgsvc.ApplyBootOverlay(context.Background(), cfg)
+
+	logger := newLogger(os.Stdout, cfg.LogLevel)
+	cfgsvc.LogEnvDeprecations(logger)
 
 	// Optional Redis/Valkey backend for rate limiting shared across
 	// instances. Falls back to in-memory when REDIS_URL is unset or
@@ -442,9 +452,8 @@ func main() {
 	// Platform configuration lives in the settings table (config-in-DB):
 	// DB value > env var > catalog default. Env is bootstrap-only —
 	// see config.BootstrapEnvVars. The service caches non-secret values
-	// for 30s and drops the cache on every admin write.
-	cfgsvc := service.NewConfigService(db)
-	cfgsvc.LogEnvDeprecations(logger)
+	// for 30s and drops the cache on every admin write. (cfgsvc was
+	// built at boot-overlay time above.)
 	// Vietnamese payment gateways (plan §25 provider abstraction):
 	// one-off VND payments via Pay2S (bank transfer / Napas 247 QR),
 	// ZaloPay and payOS (VietQR). Registered unconditionally —
@@ -1856,8 +1865,19 @@ func isFrontendAsset(clean string) bool {
 // rather than through log. A log.Fatalf here would still exit, but it
 // would announce the server refusing to start as an INFO line, and a
 // deployment that pages on level=ERROR would never hear about it.
-func newLogger(w io.Writer) *slog.Logger {
-	logger := slog.New(slog.NewJSONHandler(w, nil))
+func newLogger(w io.Writer, level string) *slog.Logger {
+	var lv slog.Level
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		lv = slog.LevelDebug
+	case "warn", "warning":
+		lv = slog.LevelWarn
+	case "error":
+		lv = slog.LevelError
+	default:
+		lv = slog.LevelInfo
+	}
+	logger := slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lv}))
 	slog.SetDefault(logger)
 	return logger
 }

@@ -284,7 +284,7 @@ func TestInternalErrorReachesTheConfiguredLogger(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	var buf bytes.Buffer
-	newLogger(&buf) // as main does, minus the os.Stdout
+	newLogger(&buf, "info") // as main does, minus the os.Stdout
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

@@ -716,3 +716,159 @@ func cfgsvcNormalizeStrict(typ, value string) (string, error) {
 	}
 	return n, nil
 }
+
+// ApplyBootOverlay copies the effective value of every catalog key
+// that has a runtime home in *config.Config onto cfg, so the settings
+// table wins over the environment for the restart-scoped keys. The
+// live-scoped keys (payment gateway credentials, Stripe secret,
+// domains, session cookie domain, SMTP, retention, branding) are
+// re-read per use by their own seams and never need this.
+//
+// Precedence is the catalog's own: DB row > env var > catalog default.
+// A key that is explicit in NEITHER the database nor the environment
+// leaves cfg's already-loaded value alone — config.Load has applied
+// the same defaults, so nothing is gained by stomping. The one
+// derived exception is payment.stripe_livemode (sk_live_-prefix
+// derivation when unset), applied unconditionally through GetString.
+//
+// Every accessor falls back to cfg's current (env-loaded) value on a
+// read error, so a transient settings failure degrades to today's env
+// configuration instead of wiping it.
+//
+// Call at boot, after the database is reachable and BEFORE the
+// services that consume cfg are constructed.
+func (s *ConfigService) ApplyBootOverlay(ctx context.Context, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	// getSet returns the effective value of key only when something
+	// explicit is in effect (DB row beyond the default, or env var);
+	// otherwise — or on a read error — the caller's fallback stands.
+	getStr := func(key, fallback string) string {
+		if set, err := s.IsSet(ctx, key); err != nil || !set {
+			return fallback
+		}
+		v, err := s.GetString(ctx, key)
+		if err != nil {
+			return fallback
+		}
+		return v
+	}
+	getSecret := func(key, fallback string) string {
+		if set, err := s.IsSet(ctx, key); err != nil || !set {
+			return fallback
+		}
+		v, err := s.GetSecret(ctx, key)
+		if err != nil {
+			return fallback
+		}
+		return v
+	}
+	getInt := func(key string, fallback int) int {
+		if set, err := s.IsSet(ctx, key); err != nil || !set {
+			return fallback
+		}
+		n, err := s.GetInt(ctx, key)
+		if err != nil {
+			return fallback
+		}
+		return n
+	}
+	// getDur keeps the operator's raw spelling ("2h" stays "2h" —
+	// these cfg fields are strings re-parsed at their use sites).
+	getDur := func(key, fallback string) string {
+		if set, err := s.IsSet(ctx, key); err != nil || !set {
+			return fallback
+		}
+		v, err := s.GetString(ctx, key)
+		if err != nil {
+			return fallback
+		}
+		return v
+	}
+
+	// ─── app ───
+	cfg.BaseURL = getStr("app.base_url", cfg.BaseURL)
+	cfg.Environment = getStr("app.environment", cfg.Environment)
+	cfg.LogLevel = getStr("observability.log_level", cfg.LogLevel)
+	// Quota threshold: bps in the catalog vs the legacy float env var
+	// QUOTA_WARNING_THRESHOLD that config.Load reads. Same set-only
+	// rule keeps the legacy variable working untouched.
+	if bps := getInt("app.quota_warning_threshold", 0); bps > 0 {
+		cfg.QuotaWarningThreshold = float64(bps) / 10000
+	}
+	if v := getStr("app.admin_emails", ""); v != "" {
+		var emails []string
+		for e := range strings.SplitSeq(v, ",") {
+			if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+				emails = append(emails, e)
+			}
+		}
+		cfg.AdminEmails = emails
+	}
+
+	// ─── payment: Stripe ─── (secret keys; livemode is the one
+	// unconditional read — GetString derives it from the sk_ prefix
+	// when unset, which IS the documented effective value)
+	cfg.StripeSecretKey = getSecret("payment.stripe_secret_key", cfg.StripeSecretKey)
+	cfg.StripeWebhookSecret = getSecret("payment.stripe_webhook_secret", cfg.StripeWebhookSecret)
+	if b, err := s.GetBool(ctx, "payment.stripe_livemode"); err == nil {
+		cfg.StripeLivemode = b
+	}
+
+	// ─── payment: Vietnamese gateways (typed bundles, same
+	// precedence internally) ───
+	if c, err := s.Pay2SCreds(ctx); err == nil {
+		cfg.Pay2S = c
+	}
+	if c, err := s.ZaloPayCreds(ctx); err == nil {
+		cfg.ZaloPay = c
+	}
+	if c, err := s.PayOSCreds(ctx); err == nil {
+		cfg.PayOS = c
+	}
+
+	// ─── smtp ───
+	cfg.SMTPHost = getStr("smtp.host", cfg.SMTPHost)
+	cfg.SMTPPort = getStr("smtp.port", cfg.SMTPPort)
+	cfg.SMTPUsername = getStr("smtp.username", cfg.SMTPUsername)
+	cfg.SMTPPassword = getSecret("smtp.password", cfg.SMTPPassword)
+	cfg.SMTPFrom = getStr("smtp.from", cfg.SMTPFrom)
+
+	// ─── ratelimit ───
+	cfg.RateLimitAPI = getInt("ratelimit.api", cfg.RateLimitAPI)
+	cfg.RateLimitAdmin = getInt("ratelimit.admin", cfg.RateLimitAdmin)
+	cfg.RateLimitAuth = getInt("ratelimit.auth", cfg.RateLimitAuth)
+	cfg.RateLimitOTPSend = getInt("ratelimit.otp_send", cfg.RateLimitOTPSend)
+	cfg.BFMaxFails = getInt("ratelimit.bf_max_fails", cfg.BFMaxFails)
+	cfg.BFLockoutSeconds = getInt("ratelimit.bf_lockout_seconds", cfg.BFLockoutSeconds)
+
+	// ─── webhook ───
+	cfg.WebhookMaxAttempts = getInt("webhook.max_attempts", cfg.WebhookMaxAttempts)
+	cfg.WebhookRetryInterval = getDur("webhook.retry_interval", cfg.WebhookRetryInterval)
+	cfg.WebhookHTTPTimeout = getDur("webhook.http_timeout", cfg.WebhookHTTPTimeout)
+	if set, err := s.IsSet(ctx, "webhook.allow_private"); err == nil && set {
+		if b, err := s.GetBool(ctx, "webhook.allow_private"); err == nil {
+			cfg.WebhookAllowPrivate = b
+		}
+	}
+
+	// ─── storage ───
+	cfg.StorageEndpoint = getStr("storage.endpoint", cfg.StorageEndpoint)
+	cfg.StorageRegion = getStr("storage.region", cfg.StorageRegion)
+	cfg.StorageBucket = getStr("storage.bucket", cfg.StorageBucket)
+	cfg.StorageAccessKey = getStr("storage.access_key", cfg.StorageAccessKey)
+	cfg.StorageSecretKey = getSecret("storage.secret_key", cfg.StorageSecretKey)
+	cfg.StoragePublicURL = getStr("storage.public_url", cfg.StoragePublicURL)
+	if set, err := s.IsSet(ctx, "storage.force_path_style"); err == nil && set {
+		if b, err := s.GetBool(ctx, "storage.force_path_style"); err == nil {
+			cfg.StorageForcePathStyle = b
+		}
+	}
+	cfg.StorageUploadTTL = getDur("storage.upload_ttl", cfg.StorageUploadTTL)
+	cfg.StorageDownloadTTL = getDur("storage.download_ttl", cfg.StorageDownloadTTL)
+	cfg.StorageFeedURLTTL = getDur("storage.feed_url_ttl", cfg.StorageFeedURLTTL)
+	if mb := getInt("storage.max_release_sign_size_mb", 0); mb > 0 {
+		cfg.MaxReleaseSignSize = int64(mb) * 1024 * 1024
+	}
+}
