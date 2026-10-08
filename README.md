@@ -100,7 +100,9 @@ curl -O https://raw.githubusercontent.com/hitechcloud-vietnam/hitechcloud_keygat
 cp .env.example .env
 
 # 2. Set your secrets
-# Edit .env: set JWT_SECRET and LICENSE_SIGNING_KEY (openssl rand -hex 32)
+# Edit .env: set JWT_SECRET and LICENSE_SIGNING_KEY (openssl rand -hex 32).
+# For production also set SECRET_ENCRYPTION_KEY, REFERRAL_HASH_SALT and
+# RELEASE_KEY_ENCRYPTION_KEY — see docs/DEPLOYMENT.md for every variable.
 
 # 3. Run
 docker compose up -d
@@ -115,6 +117,8 @@ make build && ./bin/hitechcloud_keygate_licensing
 ```
 
 Open **http://localhost:9000** — the setup wizard guides you from there.
+
+> 📖 **Operations:** environment reference, upgrades and rollback procedure in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 > 📖 Full docs, deployment guides, and SDK examples at **[hitechcloud.vn/docs](https://hitechcloud.vn/docs)**
 
