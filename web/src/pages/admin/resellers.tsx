@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Eye, Plus, Trash2 } from "lucide-react"
+import { Eye, Handshake, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { showToast } from "@/components/toast"
+import { ListEmptyState } from "@/components/empty-state"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,7 +20,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -100,12 +100,15 @@ export default function ResellersPage() {
       setDeleting(null)
     },
     onError: (e: Error) => {
+      // The documented delete refusals say what is still attached and
+      // what to do about it — keep them, and carry the request id on
+      // every refusal for the support reference.
       if (e instanceof ApiError && e.code === "RESSELLER_HAS_ALLOCATIONS") {
-        showToast(t("resellers.deleteBlockedAllocations"), "error")
+        toastError(e, t("resellers.deleteBlockedAllocations"))
       } else if (e instanceof ApiError && e.code === "RESSELLER_HAS_COMMISSIONS") {
-        showToast(t("resellers.deleteBlockedCommissions"), "error")
+        toastError(e, t("resellers.deleteBlockedCommissions"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -148,6 +151,21 @@ export default function ResellersPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : resellers.length === 0 ? (
+            <ListEmptyState
+              icon={Handshake}
+              title={t("resellers.empty")}
+              description={t("empty.resellers.desc")}
+              action={{ label: t("resellers.new"), onClick: () => setCreating(true) }}
+              filtered={search !== "" || statusFilter !== ""}
+              filteredTitle={t("filter.noMatches")}
+              filteredDescription={t("empty.filteredDesc")}
+              clearLabel={t("common.clearFilters")}
+              onClearFilters={() => {
+                setSearch("")
+                setStatusFilter("")
+              }}
+            />
           ) : (
             <>
               <DataTable>
@@ -162,7 +180,6 @@ export default function ResellersPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {resellers.length === 0 && <DataTableEmpty colSpan={6} message={t("resellers.empty")} />}
                   {resellers.map((r: Reseller) => (
                     <DataTableRow key={r.id}>
                       <DataTableCell>
@@ -249,7 +266,7 @@ function ResellerCreateDialog({ open, onClose }: { open: boolean; onClose: () =>
       showToast(t("toast.resellerCreated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {

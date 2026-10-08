@@ -1601,6 +1601,36 @@ const en = {
   "toast.reviewRejected": "Review rejected.",
   "toast.reviewReplied": "Reply saved.",
   "toast.reviewDeleted": "Review deleted.",
+
+  // Language switcher
+  "nav.language": "Language",
+
+  // Empty states (§89): what the resource is, why it is empty, what to do next.
+  "empty.reviews.title": "No reviews yet",
+  "empty.reviews.desc":
+    "Reviews customers write on your marketplace products show up here for moderation. Approved reviews appear on the product page.",
+  "empty.resellers.desc":
+    "Resellers are partner accounts that resell your licenses — each one owns its allocations, commission ledger and wholesale prices. Create one to start recording partner sales.",
+  "empty.affiliates.desc":
+    "Affiliates earn a commission on every order attributed to their referral codes. Create one to get your first /r/ link to share.",
+  "empty.orders.desc":
+    "Every completed checkout lands here, priced exactly as it was paid. Orders appear after the first successful payment.",
+  "empty.orders.customerDesc":
+    "Orders you place land here with their line items and invoices. Buy a plan in the marketplace to see your first one here.",
+  "empty.downloads.desc":
+    "Installers and release files appear here once a product your licenses cover publishes a release. Just bought a license? Check back after the vendor ships a build.",
+  "empty.apiKeys.desc":
+    "API keys let scripts and services call the API without a password. Create one and copy the secret now — it is shown only once.",
+  "empty.webhooks.desc":
+    "Webhooks deliver a JSON POST to your endpoint whenever something happens on your account. Add one to react to license and billing events automatically.",
+  "empty.filteredDesc": "Nothing matches the current filters. Clear them or change the search to see more.",
+  "empty.browseMarketplace": "Browse the marketplace",
+  "common.clearFilters": "Clear filters",
+
+  // Error UX (§90): what happened, what to do next, and a reference to quote.
+  "error.requestId": "Request ID: {id}",
+  "error.whatNext": "Try again in a moment. If this keeps happening, contact support.",
+  "error.unavailable": "The server could not be reached. Check your connection and try again.",
 } as const
 
 export default en

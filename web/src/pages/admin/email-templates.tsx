@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Code, Eye, Mail, Pencil, RotateCcw } from "lucide-react"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -100,7 +100,7 @@ export default function EmailTemplatesManager() {
       qc.invalidateQueries({ queryKey: ["admin", "email-templates"] })
       setEditing(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   // confirmReset holds the template key pending revert. Reset
@@ -114,7 +114,7 @@ export default function EmailTemplatesManager() {
       qc.invalidateQueries({ queryKey: ["admin", "email-templates"] })
       setConfirmReset(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const templates = data?.templates || {}

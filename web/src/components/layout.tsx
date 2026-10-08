@@ -32,6 +32,7 @@ import {
 import { useState } from "react"
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { LanguageSwitcher } from "@/components/language-switcher"
 import { ServiceUnavailableScreen } from "@/components/service-unavailable"
 import { Button } from "@/components/ui/button"
 import {
@@ -188,10 +189,13 @@ export function AdminLayout() {
       {/* Settings — fixed at bottom above user menu */}
       <div className="px-2">{renderNavItem(settingsItem)}</div>
       <Separator />
-      <div className="p-3">
+      {/* Language choice beside the user menu: a preference that
+        belongs to whoever is signed in, one tap away from their name. */}
+      <div className="p-3 flex items-center gap-2">
+        <LanguageSwitcher iconOnly />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="w-full justify-start gap-2">
+            <Button variant="ghost" className="flex-1 min-w-0 justify-start gap-2">
               <div className="h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shrink-0">
                 {user.name?.charAt(0)?.toUpperCase() || user.email.charAt(0).toUpperCase()}
               </div>
@@ -267,6 +271,7 @@ export function AdminLayout() {
           <span className="min-w-0 flex-1 truncate font-semibold tracking-tight">
             {currentPage?.label ?? site_name}
           </span>
+          <LanguageSwitcher iconOnly />
         </header>
 
         <main className="flex-1 overflow-auto">
@@ -346,6 +351,7 @@ export function PortalLayout() {
                 </Button>
               </Link>
             )}
+            <LanguageSwitcher />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="gap-2">
@@ -434,6 +440,7 @@ export function PublicLayout() {
                 {t("nav.marketplace")}
               </div>
             </Link>
+            <LanguageSwitcher />
             <Link to="/login">
               <Button variant="outline" size="sm">
                 {t("marketplace.signIn")}

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -63,7 +63,7 @@ export default function TaxRatesPage() {
       showToast(t("toast.taxRateDeleted"), "success")
       setDeleting(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -200,7 +200,7 @@ function TaxRateDialog({ open, onClose, rate }: { open: boolean; onClose: () => 
       showToast(rate ? t("toast.taxRateSaved") : t("toast.taxRateCreated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {

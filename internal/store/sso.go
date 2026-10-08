@@ -7,8 +7,35 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/crypto"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 )
+
+// openSSOSecret decrypts conn.OIDCClientSecret in place after a read. A
+// nil pointer stays nil (the field is "cleared" / NULL); a legacy
+// plaintext value passes through unchanged. Returns an error only when a
+// sealed value cannot be opened (wrong or missing key).
+func openSSOSecret(conn *model.SSOConnection) error {
+	if conn.OIDCClientSecret == nil {
+		return nil
+	}
+	secret, err := crypto.Open(*conn.OIDCClientSecret)
+	if err != nil {
+		return err
+	}
+	conn.OIDCClientSecret = &secret
+	return nil
+}
+
+// sealSSOSecret returns the OIDC client secret sealed for storage, or nil
+// when the field is nil (NULL). Symmetric with openSSOSecret.
+func sealSSOSecret(conn *model.SSOConnection) *string {
+	if conn.OIDCClientSecret == nil {
+		return nil
+	}
+	sealed := crypto.Seal(*conn.OIDCClientSecret)
+	return &sealed
+}
 
 // ─── Enterprise SSO + SCIM groundwork (Phase 8, slice 1) ───
 //
@@ -135,7 +162,12 @@ func (s *Store) CreateSSOConnection(ctx context.Context, conn *model.SSOConnecti
 	if err := conn.Validate(); err != nil {
 		return ErrSSOInvalidConfig
 	}
+	// Seal the OIDC client secret at rest (nil stays NULL = "cleared");
+	// restore the plaintext on the struct so the caller still holds it.
+	origSecret := conn.OIDCClientSecret
+	conn.OIDCClientSecret = sealSSOSecret(conn)
 	_, err := s.DB.NewInsert().Model(conn).Exec(ctx)
+	conn.OIDCClientSecret = origSecret
 	if isUniqueViolation(err) {
 		return ssoConflict(err)
 	}
@@ -146,7 +178,13 @@ func (s *Store) CreateSSOConnection(ctx context.Context, conn *model.SSOConnecti
 // sql.ErrNoRows so the caller can say 404 rather than 500.
 func (s *Store) FindSSOConnectionByID(ctx context.Context, id string) (*model.SSOConnection, error) {
 	conn := new(model.SSOConnection)
-	return conn, s.DB.NewSelect().Model(conn).Where("id = ?", id).Scan(ctx)
+	if err := s.DB.NewSelect().Model(conn).Where("id = ?", id).Scan(ctx); err != nil {
+		return nil, err
+	}
+	if err := openSSOSecret(conn); err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 // FindSSOConnectionByDomain looks a connection up by the email domain it
@@ -161,7 +199,13 @@ func (s *Store) FindSSOConnectionByDomain(ctx context.Context, domain string) (*
 		return nil, err
 	}
 	conn := new(model.SSOConnection)
-	return conn, s.DB.NewSelect().Model(conn).Where("domain = ?", d).Scan(ctx)
+	if err := s.DB.NewSelect().Model(conn).Where("domain = ?", d).Scan(ctx); err != nil {
+		return nil, err
+	}
+	if err := openSSOSecret(conn); err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 // ListSSOConnections is the admin listing: one page of connections plus
@@ -176,6 +220,11 @@ func (s *Store) ListSSOConnections(ctx context.Context, p Page) ([]*model.SSOCon
 	total, err := scanPage(ctx, q, p)
 	if err != nil {
 		return nil, 0, err
+	}
+	// Best-effort open: the listing never serialises the secret
+	// (json:"-"), so a value we can't decrypt is left as-is.
+	for _, conn := range out {
+		_ = openSSOSecret(conn)
 	}
 	if p.Limit <= 0 {
 		total = len(out)
@@ -206,12 +255,17 @@ func (s *Store) UpdateSSOConnection(ctx context.Context, conn *model.SSOConnecti
 		return ErrSSOInvalidConfig
 	}
 	conn.UpdatedAt = time.Now()
+	// Seal the OIDC client secret at rest (nil stays NULL = "cleared");
+	// restore the plaintext on the struct after the write.
+	origSecret := conn.OIDCClientSecret
+	conn.OIDCClientSecret = sealSSOSecret(conn)
 	_, err := s.DB.NewUpdate().Model(conn).
 		Column("name", "provider_type", "domain",
 			"saml_entity_id", "saml_sso_url", "saml_certificate",
 			"oidc_issuer", "oidc_client_id", "oidc_client_secret", "oidc_scopes",
 			"updated_at").
 		WherePK().Exec(ctx)
+	conn.OIDCClientSecret = origSecret
 	if isUniqueViolation(err) {
 		return ssoConflict(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/crypto"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 )
 
@@ -30,9 +31,13 @@ func (s *Store) CreateCustomerWebhook(ctx context.Context, w *model.CustomerWebh
 	if w.ID == "" {
 		w.ID = newID()
 	}
-	w.Secret = rawSecret
 	w.SecretPrefix = model.CustomerWebhookDisplayPrefix(rawSecret)
+	// Persist the secret SEALED at rest (encryption at rest via the secret
+	// box), then restore the plaintext on the struct so the create handler
+	// still shows it to the customer exactly once. Read paths open it back.
+	w.Secret = crypto.Seal(rawSecret)
 	_, err := s.DB.NewInsert().Model(w).Exec(ctx)
+	w.Secret = rawSecret // restore plaintext for the caller
 	return err
 }
 
@@ -48,6 +53,14 @@ func (s *Store) ListCustomerWebhooksByUser(ctx context.Context, userID string, p
 	if err != nil {
 		return nil, 0, err
 	}
+	// Best-effort open: the list never serialises the secret (json:"-"),
+	// so a value we can't decrypt is left as-is rather than failing the
+	// whole page.
+	for _, w := range out {
+		if secret, err := crypto.Open(w.Secret); err == nil {
+			w.Secret = secret
+		}
+	}
 	if p.Limit <= 0 {
 		total = len(out)
 	}
@@ -60,7 +73,18 @@ func (s *Store) ListCustomerWebhooksByUser(ctx context.Context, userID string, p
 // carries the plaintext Secret so the dispatch path can sign with it.
 func (s *Store) FindCustomerWebhookByID(ctx context.Context, id string) (*model.CustomerWebhook, error) {
 	w := new(model.CustomerWebhook)
-	return w, s.DB.NewSelect().Model(w).Where("id = ?", id).Scan(ctx)
+	if err := s.DB.NewSelect().Model(w).Where("id = ?", id).Scan(ctx); err != nil {
+		return nil, err
+	}
+	// Open the secret here: the store is the trust boundary, and the
+	// dispatch signer needs the plaintext to compute each HMAC. Legacy
+	// plaintext values pass through unchanged.
+	secret, err := crypto.Open(w.Secret)
+	if err != nil {
+		return nil, err
+	}
+	w.Secret = secret
+	return w, nil
 }
 
 // UpdateCustomerWebhook writes only the customer-mutable columns (url,
@@ -98,10 +122,21 @@ func (s *Store) CountCustomerWebhooksByUser(ctx context.Context, userID string) 
 // (a test fire is a separate, synchronous path).
 func (s *Store) FindCustomerWebhooksForEvent(ctx context.Context, event string) ([]*model.CustomerWebhook, error) {
 	var out []*model.CustomerWebhook
-	err := s.DB.NewSelect().Model(&out).
+	if err := s.DB.NewSelect().Model(&out).
 		Where("active = true AND ? = ANY(events)", event).
-		Scan(ctx)
-	return out, err
+		Scan(ctx); err != nil {
+		return nil, err
+	}
+	// Open each secret so the dispatch signer can compute HMACs (legacy
+	// plaintext values pass through unchanged).
+	for _, w := range out {
+		secret, err := crypto.Open(w.Secret)
+		if err != nil {
+			return nil, err
+		}
+		w.Secret = secret
+	}
+	return out, nil
 }
 
 // TouchCustomerWebhookLastDelivery stamps last_delivery_at after a

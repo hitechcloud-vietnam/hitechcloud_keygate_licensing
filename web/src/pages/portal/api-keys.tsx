@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, Copy, Key, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { ListEmptyState } from "@/components/empty-state"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,7 +19,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -66,7 +66,7 @@ export default function PortalAPIKeysPage() {
       showToast(t("portal.apiKeysRevokedToast"), "success")
       setRevoking(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -85,6 +85,15 @@ export default function PortalAPIKeysPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : keys.length === 0 ? (
+            // No filters here: an empty table is a first-run story, so
+            // it explains what keys are for and offers the create.
+            <ListEmptyState
+              icon={Key}
+              title={t("portal.apiKeysEmpty")}
+              description={t("empty.apiKeys.desc")}
+              action={{ label: t("portal.apiKeysNew"), onClick: () => setCreating(true) }}
+            />
           ) : (
             <>
               <DataTable>
@@ -100,7 +109,6 @@ export default function PortalAPIKeysPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {keys.length === 0 && <DataTableEmpty colSpan={7} message={t("portal.apiKeysEmpty")} />}
                   {keys.map((k: CustomerAPIKey) => {
                     const revoked = !!k.revoked_at
                     return (
@@ -202,7 +210,7 @@ function CreateKeyDialog({ onClose, onCreated }: { onClose: () => void; onCreate
         expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
       }),
     onSuccess: (res) => onCreated(res.secret),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {

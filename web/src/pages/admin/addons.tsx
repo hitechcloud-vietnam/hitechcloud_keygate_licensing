@@ -3,7 +3,7 @@ import { Package, Pencil, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router-dom"
 import { ProductSelect } from "@/components/product-select"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -73,7 +73,7 @@ export default function AddonsPage() {
       qc.invalidateQueries({ queryKey: ["admin", "addons"] })
       setDeleting(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   if (!isLoading && products.length === 0) {
@@ -262,7 +262,7 @@ function AddonDialog({
       if (!addon) showToast(t("toast.addonCreated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, Copy, Key, Trash2 } from "lucide-react"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -137,7 +137,7 @@ function LicenseCard({ license: lic, renewalsEnabled }: { license: PortalLicense
       const res = await portal.renewUpdates({ license_id: lic.id })
       window.location.href = res.url
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "An error occurred")
+      toastError(err)
       setRenewing(false)
     }
   }
@@ -147,7 +147,7 @@ function LicenseCard({ license: lic, renewalsEnabled }: { license: PortalLicense
       const res = await portal.getBillingPortal({ license_id: lic.id })
       window.location.href = res.url
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "An error occurred")
+      toastError(err)
     }
   }
 
@@ -336,12 +336,13 @@ function ActivationsSection({ license }: { license: PortalLicense }) {
       // below already dropped the row.
       qc.invalidateQueries({ queryKey: ["portal", "licenses"] })
     },
-    // Errors surface via the global MutationCache toast (main.tsx).
-    // Just close the dialog either way so the row doesn't get stuck.
+    // Errors surface through the toastError below — the message plus a
+    // request-id reference — and the dialog closes either way so the
+    // row doesn't get stuck.
     onSettled: () => {
       setRemoving(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   // Read-only path for unauthorised (pending-seat) viewers, and a
@@ -644,7 +645,7 @@ function InviteSeatDialog({ license, onClose }: { license: PortalLicense; onClos
       qc.invalidateQueries({ queryKey: ["portal", "seats", license.id] })
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const trimmed = email.trim()
@@ -791,7 +792,7 @@ function CancelDialog({
       qc.invalidateQueries({ queryKey: ["portal", "licenses"] })
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -919,7 +920,7 @@ function ChangePlanDialog({ license, onClose }: { license: PortalLicense; onClos
     },
     onError: (e: Error) => {
       setConfirming(null)
-      showToast(e.message, "error")
+      toastError(e)
     },
   })
 

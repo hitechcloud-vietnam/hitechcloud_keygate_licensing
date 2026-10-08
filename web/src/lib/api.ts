@@ -5,19 +5,30 @@ const BASE = `${import.meta.env.VITE_API_URL || ""}/api/v1`
 // session renewal that failed for one of those reasons. The user may
 // well still be signed in, so it must never be read as a sign-out; the
 // auth layer retries instead (see AuthProvider).
-export class ServiceUnavailableError extends Error {}
+export class ServiceUnavailableError extends Error {
+  // The X-Request-ID the response echoed back ("" when the request
+  // never produced one), so a toast can hand support a reference.
+  requestId: string
+  constructor(message: string, requestId = "") {
+    super(message)
+    this.requestId = requestId
+  }
+}
 
 // ApiError is a request the server answered with a structured error. It
 // carries the machine-readable error code beside the human message so a
 // page can route the message to the right place — a coupon refusal goes
-// next to the coupon field, not into a generic toast.
+// next to the coupon field, not into a generic toast. requestId is the
+// X-Request-ID the server echoed back, for error reporting (§90).
 export class ApiError extends Error {
   code: string
   status: number
-  constructor(message: string, status: number, code = "") {
+  requestId: string
+  constructor(message: string, status: number, code = "", requestId = "") {
     super(message)
     this.status = status
     this.code = code
+    this.requestId = requestId
   }
 }
 
@@ -86,6 +97,11 @@ async function request<T>(path: string, opts?: RequestInit, retried = false): Pr
 
   if (res.status === 204) return undefined as T
 
+  // The middleware's request id, echoed on every response. It is the
+  // reference an error toast quotes so a failure can be traced in the
+  // server logs (plan §90).
+  const requestId = res.headers.get("X-Request-ID") || ""
+
   // Read the body as text first so an empty or non-JSON response (502
   // from a proxy, server crash mid-response, HTML error page, etc.)
   // doesn't produce the cryptic "Unexpected end of JSON input" — that
@@ -109,8 +125,8 @@ async function request<T>(path: string, opts?: RequestInit, retried = false): Pr
     // A 429 or 5xx says nothing about the session: the server is busy or
     // failing. Callers that decide "signed in or not" must tell it apart.
     const code = typeof json?.error?.code === "string" ? json.error.code : ""
-    if (res.status === 429 || res.status >= 500) throw new ServiceUnavailableError(msg)
-    throw new ApiError(msg, res.status, code)
+    if (res.status === 429 || res.status >= 500) throw new ServiceUnavailableError(msg, requestId)
+    throw new ApiError(msg, res.status, code, requestId)
   }
   return (json?.data !== undefined ? json.data : json) as T
 }

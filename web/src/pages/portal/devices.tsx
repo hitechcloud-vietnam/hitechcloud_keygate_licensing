@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { MonitorSmartphone, Plus, Trash2, Users } from "lucide-react"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -138,7 +138,7 @@ function ActivationsSection({ license, canManage }: { license: PortalLicense; ca
       qc.invalidateQueries({ queryKey: ["portal", "licenses"] })
     },
     onSettled: () => setRemoving(null),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   // Read-only fallback for unauthorised viewers (pending seats) and on a
@@ -238,7 +238,7 @@ function SeatsSection({
       qc.invalidateQueries({ queryKey: ["portal", "seats", license.id] })
     },
     onSettled: () => setRemoving(null),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const seats = seatsQuery.data?.seats || []
@@ -365,7 +365,7 @@ function InviteSeatDialog({ license, onClose }: { license: PortalLicense; onClos
       qc.invalidateQueries({ queryKey: ["portal", "seats", license.id] })
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const trimmed = email.trim()

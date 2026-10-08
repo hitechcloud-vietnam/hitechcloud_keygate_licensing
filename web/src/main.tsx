@@ -4,10 +4,11 @@ import { createRoot } from "react-dom/client"
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { AdminLayout, PortalLayout, PublicLayout } from "@/components/layout"
-import { showToast, ToastBridge, ToastProvider } from "@/components/toast"
+import { showToast, ToastBridge, ToastProvider, toastCount } from "@/components/toast"
 import { AuthProvider } from "@/hooks/use-auth"
 import { SiteConfigProvider } from "@/hooks/use-site-config"
 import { I18nProvider } from "@/i18n"
+import { errorMessage, isErrorHandled } from "@/lib/errors"
 import AcceptInvitePage from "@/pages/accept-invite"
 import AddonsPage from "@/pages/admin/addons"
 import AffiliateDetailPage from "@/pages/admin/affiliate-detail"
@@ -53,7 +54,15 @@ import "./index.css"
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: (error) => {
-      showToast(error instanceof Error ? error.message : "An error occurred")
+      // Safety net for mutations with no onError of their own. A page
+      // that handles its failure toasts a curated message (usually via
+      // toastError) in its own onError, which React Query runs right
+      // after this hook — so this check waits a tick and stays quiet
+      // when the failure was already surfaced. One failure, one toast.
+      const before = toastCount()
+      setTimeout(() => {
+        if (!isErrorHandled(error) && toastCount() === before) showToast(errorMessage(error))
+      }, 0)
     },
   }),
   defaultOptions: {

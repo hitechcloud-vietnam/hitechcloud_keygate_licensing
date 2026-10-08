@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/crypto"
 )
 
 // SettingMaintenanceFeatures is the operator's confirmation that every
@@ -288,30 +290,39 @@ var settingSecretKeys = map[string]bool{
 const settingEncPrefix = "enc:v1:"
 
 // encodeSettingValue encrypts a secret setting's value for storage.
-// Non-secret keys, empty values, and installs without an encryption
-// key pass through unchanged; the value is still redacted from the UI.
+// Non-secret keys and empty values pass through unchanged; the value is
+// still redacted from the UI. Secret values are sealed with the secret
+// box (SECRET_ENCRYPTION_KEY) when configured, falling back to the
+// license-key AEAD (RELEASE_KEY_ENCRYPTION_KEY) so installs configured
+// before the secret box keep working. With neither, the write is refused.
 func (s *Store) encodeSettingValue(key, value string) (string, error) {
 	if value == "" || !settingSecretKeys[key] {
 		return value, nil
 	}
-	// A secret must never be written in the clear. Without a master key
+	// Preferred: the dedicated secret box (enc:v1:<nonce||ciphertext>).
+	if crypto.SecretBoxConfigured() {
+		return crypto.Seal(value), nil
+	}
+	// Fallback: the license-key AEAD, so existing installs keep working.
+	if s.LicenseKeyAEAD != nil {
+		ct, err := s.LicenseKeyAEAD.Encrypt([]byte(value), []byte("setting:"+key))
+		if err != nil {
+			return "", fmt.Errorf("encrypt %s: %w", key, err)
+		}
+		return settingEncPrefix + base64.StdEncoding.EncodeToString(ct), nil
+	}
+	// A secret must never be written in the clear. Without any master key
 	// there is nowhere safe to put it, so refuse rather than silently
-	// store plaintext an admin believes is encrypted. Same if the
-	// encryption itself fails.
-	if s.LicenseKeyAEAD == nil {
-		return "", ErrSecretEncryptionUnavailable
-	}
-	ct, err := s.LicenseKeyAEAD.Encrypt([]byte(value), []byte("setting:"+key))
-	if err != nil {
-		return "", fmt.Errorf("encrypt %s: %w", key, err)
-	}
-	return settingEncPrefix + base64.StdEncoding.EncodeToString(ct), nil
+	// store plaintext an admin believes is encrypted.
+	return "", ErrSecretEncryptionUnavailable
 }
 
 // GetSecretSetting returns the decrypted plaintext of a secret setting,
 // or "" if it is not set. A value stored before encryption was enabled
 // (no prefix) is returned as-is, so turning encryption on does not
-// strand existing config.
+// strand existing config. A prefixed value is opened with the secret box
+// first, falling back to the license-key AEAD for values written before
+// the box existed.
 func (s *Store) GetSecretSetting(ctx context.Context, key string) (string, error) {
 	raw, err := s.GetSetting(ctx, key)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -326,20 +337,28 @@ func (s *Store) GetSecretSetting(ctx context.Context, key string) (string, error
 	if !strings.HasPrefix(raw, settingEncPrefix) {
 		return raw, nil // stored before encryption was enabled
 	}
-	// A prefixed value is ciphertext. Without the key it cannot be
-	// decrypted, and returning the ciphertext as if it were the secret
-	// would silently feed "enc:v1:..." to SMTP AUTH or Cloudflare and
-	// fail every send while the status still reads "configured". Refuse.
-	if s.LicenseKeyAEAD == nil {
-		return "", ErrSecretEncryptionUnavailable
+	// A prefixed value is ciphertext. Returning it as if it were the
+	// secret would silently feed "enc:v1:..." to SMTP AUTH or Cloudflare
+	// and fail every send while the status still reads "configured".
+	// Try the secret box, then the legacy license-key AEAD.
+	if crypto.SecretBoxConfigured() {
+		if pt, oerr := crypto.Open(raw); oerr == nil {
+			return pt, nil
+		}
+		// Not the box's ciphertext — fall through to the legacy AEAD.
 	}
-	ct, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(raw, settingEncPrefix))
-	if err != nil {
-		return "", err
+	if s.LicenseKeyAEAD != nil {
+		ct, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(raw, settingEncPrefix))
+		if err != nil {
+			return "", err
+		}
+		pt, err := s.LicenseKeyAEAD.Decrypt(ct, []byte("setting:"+key))
+		if err != nil {
+			return "", err
+		}
+		return string(pt), nil
 	}
-	pt, err := s.LicenseKeyAEAD.Decrypt(ct, []byte("setting:"+key))
-	if err != nil {
-		return "", err
-	}
-	return string(pt), nil
+	// A prefixed value but no key of any kind that can open it: refuse
+	// rather than leak ciphertext.
+	return "", ErrSecretEncryptionUnavailable
 }

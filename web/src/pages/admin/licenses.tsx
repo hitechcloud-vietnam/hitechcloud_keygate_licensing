@@ -20,7 +20,7 @@ import { Link } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
 import { PlanSelect } from "@/components/plan-select"
 import { ProductSelect } from "@/components/product-select"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -132,7 +132,7 @@ export default function LicensesPage() {
       setCreating(false)
       showToast(t("toast.licenseCreated"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   if (!isLoading && products.length === 0) {
@@ -501,7 +501,7 @@ function LicenseDetail({ id, onClose }: { id: string; onClose: () => void }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin"] })
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const resendMut = useMutation({
     mutationFn: () => admin.resendLicenseEmail(id),
@@ -509,14 +509,14 @@ function LicenseDetail({ id, onClose }: { id: string; onClose: () => void }) {
     // leaves over SMTP a moment later, so the toast says it is on its
     // way rather than claiming it has arrived.
     onSuccess: (r) => showToast(t("toast.licenseEmailQueued", { email: r.email }), "success"),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const suspendMut = useMutation({
     mutationFn: () => admin.suspendLicense(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin"] })
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   // Unlinking is a deliberate act with Stripe's answer behind it: the
   // server asks Stripe whether the subscription is really over and
@@ -530,21 +530,21 @@ function LicenseDetail({ id, onClose }: { id: string; onClose: () => void }) {
       setConfirmUnlink(false)
       showToast(r.status === "unlinked" ? t("licenses.unlinkDone") : t("licenses.unlinkNotLinked"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const reinstateMut = useMutation({
     mutationFn: () => admin.reinstateLicense(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin"] })
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const refundMut = useMutation({
     mutationFn: () => admin.refundLicense(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin"] })
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const validUntilMut = useMutation({
     mutationFn: (validUntil: string) => admin.setLicenseValidUntil(id, validUntil),
@@ -552,7 +552,7 @@ function LicenseDetail({ id, onClose }: { id: string; onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["admin"] })
       setEditingValidUntil(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const [editingUpdatesUntil, setEditingUpdatesUntil] = useState<string | null>(null)
   const updatesUntilMut = useMutation({
@@ -561,7 +561,7 @@ function LicenseDetail({ id, onClose }: { id: string; onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["admin"] })
       setEditingUpdatesUntil(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   // Activation deletion is destructive — wrap in a confirmation
   // state so a stray ghost-click on the trash icon (icons sit
@@ -573,7 +573,7 @@ function LicenseDetail({ id, onClose }: { id: string; onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["admin", "license", id] })
       setConfirmDeactivation(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   // The key is not in the detail payload — it is fetched per click and
@@ -583,7 +583,7 @@ function LicenseDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const revealMut = useMutation({
     mutationFn: () => admin.revealLicenseKey(id),
     onSuccess: (r) => setRevealedKey(r.license_key),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const copyKey = () => {
     const write = (key: string) => {
@@ -1128,7 +1128,7 @@ function UsageTab({ licenseId }: { licenseId: string }) {
       qc.invalidateQueries({ queryKey: ["admin", "license-usage", licenseId] })
       setConfirmResetUsage(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const counters = data?.counters || []
@@ -1348,7 +1348,7 @@ function ChangePlanDialog({
       qc.invalidateQueries({ queryKey: ["admin"] })
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (

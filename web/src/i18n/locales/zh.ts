@@ -1546,6 +1546,31 @@ const zh = {
   "toast.reviewRejected": "评论已拒绝。",
   "toast.reviewReplied": "回复已保存。",
   "toast.reviewDeleted": "评论已删除。",
+
+  // 语言切换
+  "nav.language": "语言",
+
+  // 空状态（§89）：说明资源是什么、为何为空、下一步能做什么。
+  "empty.reviews.title": "暂无评论",
+  "empty.reviews.desc": "客户在您商城产品下发表的评论会显示在此处等待审核。审核通过后会显示在产品页面上。",
+  "empty.resellers.desc":
+    "经销商是转售您许可证的合作伙伴账户——每个经销商都有自己的分配许可证、佣金账本和批发价。创建一个以开始记录合作伙伴销售。",
+  "empty.affiliates.desc": "推广者通过其推广码归属的每笔订单赚取佣金。创建一个即可获得第一个可分享的 /r/ 链接。",
+  "empty.orders.desc": "每笔完成的结算都会按实际支付的价格记录在此。首笔成功付款后即可看到订单。",
+  "empty.orders.customerDesc": "您下的订单会连同明细和发票显示在这里。在商城购买套餐即可看到第一笔订单。",
+  "empty.downloads.desc":
+    "当您的许可证所覆盖的产品发布新版本后，安装包和发布文件会显示在这里。刚购买许可证？请在供应方发布构建后再来查看。",
+  "empty.apiKeys.desc": "API 密钥让脚本和服务无需密码即可调用 API。立即创建并复制密钥——它只显示一次。",
+  "empty.webhooks.desc":
+    "当您的账户发生事件时，Webhook 会向您的端点发送 JSON POST。添加一个即可自动响应许可证和计费事件。",
+  "empty.filteredDesc": "没有符合当前筛选条件的内容。清除筛选或修改搜索条件以查看更多。",
+  "empty.browseMarketplace": "浏览商城",
+  "common.clearFilters": "清除筛选",
+
+  // 错误体验（§90）：发生了什么、下一步怎么做，以及可提供的参考号。
+  "error.requestId": "请求 ID：{id}",
+  "error.whatNext": "请稍后重试。如果问题持续发生，请联系支持。",
+  "error.unavailable": "无法连接服务器。请检查网络连接后重试。",
 } as const
 
 export default zh

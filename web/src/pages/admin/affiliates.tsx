@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Eye, Plus, Trash2 } from "lucide-react"
+import { Eye, Megaphone, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { showToast } from "@/components/toast"
+import { ListEmptyState } from "@/components/empty-state"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,7 +20,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -72,12 +72,14 @@ export default function AffiliatesPage() {
       setDeleting(null)
     },
     onError: (e: Error) => {
+      // The refusals name what is still attached and the alternative
+      // (suspend) — keep them; every refusal carries its request id.
       if (e instanceof ApiError && e.code === "AFFILIATE_HAS_CONVERSIONS") {
-        showToast(t("affiliates.deleteBlockedConversions"), "error")
+        toastError(e, t("affiliates.deleteBlockedConversions"))
       } else if (e instanceof ApiError && e.code === "AFFILIATE_HAS_PAYOUTS") {
-        showToast(t("affiliates.deleteBlockedPayouts"), "error")
+        toastError(e, t("affiliates.deleteBlockedPayouts"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -120,6 +122,21 @@ export default function AffiliatesPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : affiliates.length === 0 ? (
+            <ListEmptyState
+              icon={Megaphone}
+              title={t("affiliates.empty")}
+              description={t("empty.affiliates.desc")}
+              action={{ label: t("affiliates.new"), onClick: () => setCreating(true) }}
+              filtered={search !== "" || statusFilter !== ""}
+              filteredTitle={t("filter.noMatches")}
+              filteredDescription={t("empty.filteredDesc")}
+              clearLabel={t("common.clearFilters")}
+              onClearFilters={() => {
+                setSearch("")
+                setStatusFilter("")
+              }}
+            />
           ) : (
             <>
               <DataTable>
@@ -134,7 +151,6 @@ export default function AffiliatesPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {affiliates.length === 0 && <DataTableEmpty colSpan={6} message={t("affiliates.empty")} />}
                   {affiliates.map((a: Affiliate) => (
                     <DataTableRow key={a.id}>
                       <DataTableCell>
@@ -237,7 +253,7 @@ function AffiliateCreateDialog({ open, onClose }: { open: boolean; onClose: () =
       showToast(t("toast.affiliateCreated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {

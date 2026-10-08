@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, Copy, Eye, EyeOff, Package, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Check, Copy, Eye, EyeOff, FileKey2, Package, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router-dom"
+import { ListEmptyState } from "@/components/empty-state"
 import { ProductSelect } from "@/components/product-select"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +21,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -75,7 +75,7 @@ export default function APIKeysPage() {
       setNewKey(data.key)
       showToast(t("toast.apiKeyCreated"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const deleteMut = useMutation({
     mutationFn: (id: string) => admin.deleteAPIKey(id),
@@ -83,7 +83,7 @@ export default function APIKeysPage() {
       qc.invalidateQueries({ queryKey: ["admin", "api-keys"] })
       setDeleting(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const rotateMut = useMutation({
     mutationFn: (id: string) => admin.rotateAPIKey(id),
@@ -95,7 +95,7 @@ export default function APIKeysPage() {
       setNewKey(data.key)
       showToast(`${t("apiKeys.rotate")} ✓`, "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   if (products.length === 0 && !isLoading) {
@@ -147,6 +147,21 @@ export default function APIKeysPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : keys.length === 0 ? (
+            <ListEmptyState
+              icon={FileKey2}
+              title={t("apiKeys.empty")}
+              description={t("empty.apiKeys.desc")}
+              action={{ label: t("apiKeys.new"), onClick: () => setCreating(true) }}
+              filtered={productFilter !== "" || search !== ""}
+              filteredTitle={t("filter.noMatches")}
+              filteredDescription={t("empty.filteredDesc")}
+              clearLabel={t("common.clearFilters")}
+              onClearFilters={() => {
+                setProductFilter("")
+                setSearch("")
+              }}
+            />
           ) : (
             <DataTable>
               <DataTableHeader>
@@ -160,7 +175,6 @@ export default function APIKeysPage() {
                 </DataTableRow>
               </DataTableHeader>
               <DataTableBody>
-                {keys.length === 0 && <DataTableEmpty colSpan={6} message={t("apiKeys.empty")} />}
                 {keys.map((k) => (
                   <DataTableRow key={k.id}>
                     <DataTableCell className="font-medium">{k.name}</DataTableCell>

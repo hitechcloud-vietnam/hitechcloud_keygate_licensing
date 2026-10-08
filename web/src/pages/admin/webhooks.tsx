@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   History,
+  Link2,
   Package,
   Pause,
   Play,
@@ -17,8 +18,9 @@ import {
 } from "lucide-react"
 import { Fragment, useState } from "react"
 import { Link } from "react-router-dom"
+import { ListEmptyState } from "@/components/empty-state"
 import { ProductSelect } from "@/components/product-select"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,7 +37,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -91,14 +92,14 @@ export default function WebhooksPage() {
       setNewSecret(data.secret)
       showToast(t("toast.webhookCreated"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const toggleMut = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => admin.updateWebhook(id, { active }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "webhooks"] })
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const deleteMut = useMutation({
     mutationFn: (id: string) => admin.deleteWebhook(id),
@@ -106,7 +107,7 @@ export default function WebhooksPage() {
       qc.invalidateQueries({ queryKey: ["admin", "webhooks"] })
       setDeleting(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const testMut = useMutation({
     mutationFn: (id: string) => admin.testWebhook(id),
@@ -122,7 +123,7 @@ export default function WebhooksPage() {
       qc.invalidateQueries({ queryKey: ["admin", "webhook-deliveries"] })
     },
     onError: (err: Error) => {
-      showToast(err.message || t("webhooks.testFailed"), "error")
+      toastError(err, err.message || t("webhooks.testFailed"))
     },
   })
 
@@ -175,6 +176,21 @@ export default function WebhooksPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : paginatedWebhooks.length === 0 ? (
+            <ListEmptyState
+              icon={Link2}
+              title={t("webhooks.empty")}
+              description={t("empty.webhooks.desc")}
+              action={{ label: t("webhooks.new"), onClick: () => setCreating(true) }}
+              filtered={productFilter !== "" || search !== ""}
+              filteredTitle={t("filter.noMatches")}
+              filteredDescription={t("empty.filteredDesc")}
+              clearLabel={t("common.clearFilters")}
+              onClearFilters={() => {
+                setProductFilter("")
+                setSearch("")
+              }}
+            />
           ) : (
             <>
               <DataTable>
@@ -189,7 +205,6 @@ export default function WebhooksPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {paginatedWebhooks.length === 0 && <DataTableEmpty colSpan={6} message={t("webhooks.empty")} />}
                   {paginatedWebhooks.map((wh) => (
                     <DataTableRow key={wh.id}>
                       <DataTableCell className="font-medium max-w-xs truncate">
@@ -457,7 +472,7 @@ function DeliveryLogDialog({ webhookId, onClose }: { webhookId: string; onClose:
       showToast(t("webhooks.resendQueued"), "success")
     },
     onError: (err: Error) => {
-      showToast(err.message || t("webhooks.resendFailed"), "error")
+      toastError(err, err.message || t("webhooks.resendFailed"))
     },
   })
 

@@ -14,7 +14,7 @@ import {
 import { type ChangeEvent, useEffect, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { ProductSelect } from "@/components/product-select"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -128,7 +128,7 @@ export default function ReleasesPage() {
       qc.invalidateQueries({ queryKey: ["admin", "releases"] })
       showToast(t("releases.toastPublished"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const unyankMut = useMutation({
     mutationFn: admin.unyankRelease,
@@ -137,7 +137,7 @@ export default function ReleasesPage() {
       showToast(t("releases.toastUnyanked"), "success")
       setUnyanking(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const deleteMut = useMutation({
     mutationFn: admin.deleteRelease,
@@ -146,7 +146,7 @@ export default function ReleasesPage() {
       setDeleting(null)
       showToast(t("releases.toastDraftDeleted"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   // No release-eligible products. Either no products at all, or the
@@ -613,7 +613,7 @@ function ReleaseDetailDialog({ release, onClose }: { release: Release; onClose: 
       qc.invalidateQueries({ queryKey: ["admin", "release", rel.id] })
       qc.invalidateQueries({ queryKey: ["admin", "releases"] })
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const artifacts = rel.artifacts || []
@@ -887,7 +887,7 @@ function YankDialog({ release, onClose }: { release: Release; onClose: () => voi
       showToast(t("releases.toastYanked"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,7 +67,7 @@ export default function CategoriesPage() {
       showToast(t("toast.categoryDeleted"), "success")
       setDeleting(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -216,7 +216,7 @@ function CategoryDialog({ open, onClose, category }: { open: boolean; onClose: (
       showToast(category ? t("toast.categorySaved") : t("toast.categoryCreated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const handleSubmit = (e: React.FormEvent) => {

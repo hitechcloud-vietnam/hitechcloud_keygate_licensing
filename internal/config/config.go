@@ -108,6 +108,24 @@ type Config struct {
 	//   - Losing this key permanently locks all signed releases.
 	ReleaseKeyEncryptionKey string
 
+	// SecretEncryptionKey is the master key for encrypting OTHER stored
+	// secrets at rest (webhook signing secrets, OIDC client secrets, and
+	// secret settings such as the SMTP password). It is independent of
+	// ReleaseKeyEncryptionKey and is consumed by crypto.ConfigureSecretBox
+	// (HKDF purpose "secrets-at-rest-v1"), so the two keys cannot decrypt
+	// each other's data.
+	//
+	// Operational notes:
+	//   - A stable, high-entropy string of at least 16 characters. It is
+	//     used as raw key material (NOT hex-decoded); `openssl rand -base64 32`
+	//     is a fine choice. Keep it out of the repo and identical across
+	//     restarts — changing it orphans every previously sealed secret.
+	//   - OPTIONAL. When empty the secret box runs in dev mode: secrets are
+	//     stored in the clear and SecretBoxConfigured() reports false so the
+	//     server can warn at boot. Set it in any install that stores live
+	//     credentials.
+	SecretEncryptionKey string
+
 	// MaxReleaseSignSize caps the largest artifact we will sign server-side.
 	// Pure Ed25519 requires the full message in memory; 500 MB is a
 	// reasonable default that doesn't OOM modest VMs. Larger artifacts
@@ -177,6 +195,7 @@ func Load() (*Config, error) {
 	cfg.StorageDownloadTTL = envOr("STORAGE_DOWNLOAD_TTL", "10m")
 	cfg.StorageFeedURLTTL = envOr("STORAGE_FEED_URL_TTL", "24h")
 	cfg.ReleaseKeyEncryptionKey = os.Getenv("RELEASE_KEY_ENCRYPTION_KEY")
+	cfg.SecretEncryptionKey = os.Getenv("SECRET_ENCRYPTION_KEY")
 	cfg.MaxReleaseSignSize = int64(envIntOr("MAX_RELEASE_SIGN_SIZE_MB", 500)) * 1024 * 1024
 
 	if cfg.DatabaseURL == "" {

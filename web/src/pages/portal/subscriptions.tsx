@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { CreditCard, Receipt, RefreshCw } from "lucide-react"
 import { useState } from "react"
 import { CancelDialog, ChangePlanDialog, InvoicesDialog } from "@/components/subscription-dialogs"
-import { showToast } from "@/components/toast"
+import { toastError } from "@/components/toast"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -102,7 +102,7 @@ function SubscriptionCard({ license: lic }: { license: PortalLicense }) {
       const res = await portal.getBillingPortal({ license_id: lic.id })
       window.location.href = res.url
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "An error occurred", "error")
+      toastError(err)
     }
   }
 
@@ -112,7 +112,7 @@ function SubscriptionCard({ license: lic }: { license: PortalLicense }) {
       const res = await portal.renewUpdates({ license_id: lic.id })
       window.location.href = res.url
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "An error occurred", "error")
+      toastError(err)
       setRenewing(false)
     }
   }

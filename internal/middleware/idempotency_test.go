@@ -1,57 +1,88 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/store"
 )
 
-// requireStore spins up a real store against TEST_DATABASE_URL. The
-// idempotency layer is tightly coupled to PostgreSQL semantics
-// (INSERT ... ON CONFLICT DO NOTHING + SELECT FOR UPDATE behavior),
-// so a mock would defeat the purpose. Skip cleanly when unconfigured.
-func requireStore(t *testing.T) *store.Store {
-	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("skipping idempotency middleware test: TEST_DATABASE_URL not set")
+// fakeIdemStore is an in-memory IdempotencyStore so the middleware's
+// claim / replay / refusal logic is covered without a database. It
+// mirrors the real store's BeginIdempotent semantics exactly.
+type fakeIdemStore struct {
+	mu   sync.Mutex
+	rows map[string]*store.IdempotencyRecord
+	next int64
+}
+
+func newFakeIdemStore() *fakeIdemStore {
+	return &fakeIdemStore{rows: map[string]*store.IdempotencyRecord{}}
+}
+
+func (f *fakeIdemStore) BeginIdempotent(ctx context.Context, scope, key, reqHash string) (*store.IdempotencyRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	k := scope + "\x00" + key
+	rec, ok := f.rows[k]
+	if !ok {
+		f.next++
+		nr := &store.IdempotencyRecord{ID: f.next, Scope: scope, IdempotencyKey: key, RequestHash: reqHash, State: "in_progress"}
+		f.rows[k] = nr
+		return nr, true, nil
 	}
-	s, err := store.New(dsn)
-	if err != nil {
-		t.Skipf("skipping idempotency middleware test: %v", err)
+	if rec.RequestHash != reqHash {
+		return nil, false, store.ErrIdempotencyKeyReused
 	}
-	if err := s.RunMigrations("../../db/migrations"); err != nil {
-		t.Fatalf("migrations: %v", err)
+	if rec.State == "done" {
+		return rec, false, nil
 	}
-	return s
+	return nil, false, store.ErrIdempotencyInProgress
+}
+
+func (f *fakeIdemStore) FinishIdempotent(ctx context.Context, id int64, status int, body []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.rows {
+		if r.ID == id {
+			r.State = "done"
+			r.ResponseStatus = status
+			r.ResponseBody = append([]byte(nil), body...)
+		}
+	}
+	return nil
+}
+
+func (f *fakeIdemStore) ReleaseIdempotent(ctx context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for k, r := range f.rows {
+		if r.ID == id && r.State == "in_progress" {
+			delete(f.rows, k)
+		}
+	}
+	return nil
 }
 
 // makeApp wires the Idempotency middleware in front of `handler` on
-// POST /test, mirroring the production registration shape so the
-// middleware's view of the path + method is identical to real usage.
-func makeApp(s *store.Store, handler gin.HandlerFunc) *gin.Engine {
+// POST /test with a fixed scope, mirroring production registration.
+func makeApp(s IdempotencyStore, handler gin.HandlerFunc) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/test", Idempotency(s), handler)
+	r.POST("/test", Idempotency(func(c *gin.Context) string { return "user:1" }, s), handler)
 	return r
 }
 
 func postJSON(r *gin.Engine, key, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/test",
-		strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
@@ -60,239 +91,188 @@ func postJSON(r *gin.Engine, key, body string) *httptest.ResponseRecorder {
 	return w
 }
 
-// TestIdempotency_5xxNotCached — when the handler returns 500, the
-// middleware MUST NOT cache the response. The slot is abandoned so
-// a retry hits the handler again. Without this, a transient DB blip
-// would forever "succeed" with a cached 500.
-func TestIdempotency_5xxNotCached(t *testing.T) {
-	s := requireStore(t)
-	defer s.Close()
+// TestIdempotency_NoHeaderPassthrough — an opt-in layer: without an
+// Idempotency-Key header the request passes straight through, the
+// handler runs, and nothing is claimed or cached.
+func TestIdempotency_NoHeaderPassthrough(t *testing.T) {
+	f := newFakeIdemStore()
+	var ran atomic.Bool
+	r := makeApp(f, func(c *gin.Context) {
+		ran.Store(true)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
 
-	var attempts atomic.Int32
-	handler := func(c *gin.Context) {
-		attempts.Add(1)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "transient"})
+	w := postJSON(r, "", `{"x":1}`)
+	if w.Code != 200 {
+		t.Fatalf("code = %d, want 200", w.Code)
 	}
-	r := makeApp(s, handler)
-
-	key := "idem-5xx-test-" + time.Now().Format("20060102150405.000000000")
-	body := `{"x":1}`
-
-	// First call — handler runs, returns 500. Middleware must NOT
-	// store the response_complete=true row.
-	w1 := postJSON(r, key, body)
-	if w1.Code != 500 {
-		t.Fatalf("first call: expected 500, got %d", w1.Code)
+	if !ran.Load() {
+		t.Fatal("handler must run when there is no Idempotency-Key")
 	}
-
-	// DB invariant: no slot left behind.
-	var count int
-	if err := s.DB.NewRaw(
-		"SELECT COUNT(*) FROM idempotency_keys WHERE key=?",
-		key,
-	).Scan(context.Background(), &count); err != nil {
-		t.Fatalf("count rows: %v", err)
+	if len(f.rows) != 0 {
+		t.Errorf("no slot may be claimed without a header; got %d rows", len(f.rows))
 	}
-	if count != 0 {
-		t.Errorf("after 5xx: expected 0 idempotency rows, got %d (slot leaked)", count)
-	}
-
-	// Retry — handler runs AGAIN (no cache).
-	w2 := postJSON(r, key, body)
-	if w2.Code != 500 {
-		t.Fatalf("retry: expected 500, got %d", w2.Code)
-	}
-	if a := attempts.Load(); a != 2 {
-		t.Fatalf("handler attempt count: want 2 (no caching), got %d", a)
-	}
-
-	// Cleanup
-	_, _ = s.DB.NewRaw("DELETE FROM idempotency_keys WHERE key=?", key).Exec(context.Background())
 }
 
-// TestIdempotency_4xxIsCached — counter-pin to the 5xx case: a 4xx
-// (e.g. validation error) is deterministic, so we DO cache it.
-// Retries return the same 4xx without re-running the handler.
-func TestIdempotency_4xxIsCached(t *testing.T) {
-	s := requireStore(t)
-	defer s.Close()
-
+// TestIdempotency_Replay — a retry with the same key AND same body gets
+// the original response replayed (exact status + body) with the
+// Idempotent-Replay: true header, and the handler runs only once.
+func TestIdempotency_Replay(t *testing.T) {
+	f := newFakeIdemStore()
 	var attempts atomic.Int32
-	handler := func(c *gin.Context) {
+	r := makeApp(f, func(c *gin.Context) {
 		attempts.Add(1)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "validation"})
-	}
-	r := makeApp(s, handler)
+		c.JSON(http.StatusCreated, gin.H{"id": "abc"})
+	})
 
-	key := "idem-4xx-test-" + time.Now().Format("20060102150405.000000000")
-	body := `{"x":2}`
-
-	if w1 := postJSON(r, key, body); w1.Code != 400 {
-		t.Fatalf("first call: expected 400, got %d", w1.Code)
+	body := `{"x":1}`
+	w1 := postJSON(r, "k1", body)
+	if w1.Code != 201 {
+		t.Fatalf("first call: code = %d, want 201", w1.Code)
 	}
-	if w2 := postJSON(r, key, body); w2.Code != 400 {
-		t.Fatalf("replay: expected 400, got %d", w2.Code)
+	if w1.Header().Get("Idempotent-Replay") != "" {
+		t.Error("first (non-replay) response must not carry Idempotent-Replay")
+	}
+
+	w2 := postJSON(r, "k1", body)
+	if w2.Code != 201 {
+		t.Fatalf("replay: code = %d, want 201", w2.Code)
+	}
+	if got := w2.Header().Get("Idempotent-Replay"); got != "true" {
+		t.Errorf("replay header = %q, want %q", got, "true")
+	}
+	if w2.Body.String() != w1.Body.String() {
+		t.Errorf("replay body = %q, want %q", w2.Body.String(), w1.Body.String())
 	}
 	if a := attempts.Load(); a != 1 {
-		t.Fatalf("handler attempts: want 1 (cached on replay), got %d", a)
+		t.Errorf("handler ran %d times, want 1 (replay must not re-run)", a)
 	}
-
-	_, _ = s.DB.NewRaw("DELETE FROM idempotency_keys WHERE key=?", key).Exec(context.Background())
 }
 
-// TestIdempotency_PanicAbandonsSlot — if the handler panics mid-
-// flight, the deferred cleanup must abandon the slot so the
-// next retry can claim fresh. Without this, an in-flight slot
-// stays IN_FLIGHT for the full 24h TTL.
-func TestIdempotency_PanicAbandonsSlot(t *testing.T) {
-	s := requireStore(t)
-	defer s.Close()
+// TestIdempotency_ReusedKey409 — the same key with a DIFFERENT body is a
+// client bug and is refused 409 IDEMPOTENCY_KEY_REUSED (a single-status
+// code the SDK can branch on).
+func TestIdempotency_ReusedKey409(t *testing.T) {
+	f := newFakeIdemStore()
+	r := makeApp(f, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
 
-	handler := func(c *gin.Context) {
-		// Gin's default recovery catches the panic and turns it into
-		// a 500 — that's the realistic failure mode. Idempotency
-		// middleware's defer should still abandon the slot.
-		panic("boom")
+	if w := postJSON(r, "k2", `{"a":1}`); w.Code != 200 {
+		t.Fatalf("first call: code = %d", w.Code)
 	}
-	gin.SetMode(gin.TestMode)
+	w2 := postJSON(r, "k2", `{"a":2}`) // different body, same key
+	if w2.Code != 409 {
+		t.Fatalf("reused key: code = %d, want 409", w2.Code)
+	}
+	if !strings.Contains(w2.Body.String(), "IDEMPOTENCY_KEY_REUSED") {
+		t.Errorf("409 body missing IDEMPOTENCY_KEY_REUSED: %s", w2.Body.String())
+	}
+}
+
+// TestIdempotency_InProgress409 — a second request with the same key and
+// body while the first is still running (not yet finished) is refused
+// 409 IDEMPOTENCY_IN_PROGRESS with a Retry-After hint.
+func TestIdempotency_InProgress409(t *testing.T) {
+	f := newFakeIdemStore()
+	// Seed a slot that an earlier request claimed but never finished.
+	h := requestHash(http.MethodPost, "/test", []byte(`{"x":4}`))
+	f.rows["user:1\x00k4"] = &store.IdempotencyRecord{ID: 99, Scope: "user:1", IdempotencyKey: "k4", RequestHash: h, State: "in_progress"}
+
+	var ran atomic.Bool
+	r := makeApp(f, func(c *gin.Context) {
+		ran.Store(true)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	w := postJSON(r, "k4", `{"x":4}`)
+	if w.Code != 409 {
+		t.Fatalf("code = %d, want 409", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "IDEMPOTENCY_IN_PROGRESS") {
+		t.Errorf("409 body missing IDEMPOTENCY_IN_PROGRESS: %s", w.Body.String())
+	}
+	if got := w.Header().Get("Retry-After"); got == "" {
+		t.Error("in-progress 409 should carry a Retry-After hint")
+	}
+	if ran.Load() {
+		t.Error("handler must not run while a prior attempt is in progress")
+	}
+}
+
+// TestIdempotency_5xxNotCached — a 5xx is transient, so it must NOT be
+// cached: the slot is released and a retry runs the handler again. (A 4xx
+// IS cached — it is a deterministic outcome — which is why the
+// non-5xx path calls FinishIdempotent.)
+func TestIdempotency_5xxNotCached(t *testing.T) {
+	f := newFakeIdemStore()
+	var attempts atomic.Int32
+	r := makeApp(f, func(c *gin.Context) {
+		attempts.Add(1)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "transient"})
+	})
+
+	body := `{"x":5}`
+	if w := postJSON(r, "k5", body); w.Code != 500 {
+		t.Fatalf("first call: code = %d, want 500", w.Code)
+	}
+	if len(f.rows) != 0 {
+		t.Errorf("after 5xx the slot must be released; got %d rows", len(f.rows))
+	}
+	if w := postJSON(r, "k5", body); w.Code != 500 {
+		t.Fatalf("retry: code = %d, want 500", w.Code)
+	}
+	if a := attempts.Load(); a != 2 {
+		t.Errorf("handler ran %d times, want 2 (5xx must not be cached)", a)
+	}
+}
+
+// TestIdempotency_FreshStoresResponse — a fresh claim runs the handler and
+// stores its response (status + body) so a later retry replays it, and the
+// first response carries no Idempotent-Replay header.
+func TestIdempotency_FreshStoresResponse(t *testing.T) {
+	f := newFakeIdemStore()
+	r := makeApp(f, func(c *gin.Context) {
+		c.JSON(http.StatusAccepted, gin.H{"queued": true})
+	})
+
+	w := postJSON(r, "k6", `{"x":6}`)
+	if w.Code != 202 {
+		t.Fatalf("code = %d, want 202", w.Code)
+	}
+	if w.Header().Get("Idempotent-Replay") != "" {
+		t.Error("a fresh response must not carry Idempotent-Replay")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rec := f.rows["user:1\x00k6"]
+	if rec == nil || rec.State != "done" {
+		t.Fatalf("slot not stored as done: %+v", rec)
+	}
+	if rec.ResponseStatus != 202 {
+		t.Errorf("stored status = %d, want 202", rec.ResponseStatus)
+	}
+	if string(rec.ResponseBody) != w.Body.String() {
+		t.Errorf("stored body = %q, want %q", rec.ResponseBody, w.Body.String())
+	}
+}
+
+// TestIdempotency_PanicReleasesSlot — if the handler panics, the deferred
+// cleanup releases the in_progress slot so a retry can claim fresh instead
+// of being stuck 409 until the TTL.
+func TestIdempotency_PanicReleasesSlot(t *testing.T) {
+	f := newFakeIdemStore()
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.POST("/test", Idempotency(s), handler)
+	r.POST("/test", Idempotency(func(c *gin.Context) string { return "user:1" }, f), func(c *gin.Context) {
+		panic("boom")
+	})
 
-	key := "idem-panic-test-" + time.Now().Format("20060102150405.000000000")
-	body := `{"x":3}`
-
-	w := postJSON(r, key, body)
+	w := postJSON(r, "k7", `{"x":7}`)
 	if w.Code != 500 {
-		t.Fatalf("expected 500 from panicked handler, got %d", w.Code)
+		t.Fatalf("code = %d, want 500 from recovered panic", w.Code)
 	}
-
-	// Slot must be gone (Recovery returns 500 → middleware abandons).
-	var count int
-	_ = s.DB.NewRaw("SELECT COUNT(*) FROM idempotency_keys WHERE key=?", key).
-		Scan(context.Background(), &count)
-	if count != 0 {
-		t.Errorf("after panic: expected 0 rows, got %d (slot leaked)", count)
+	if len(f.rows) != 0 {
+		t.Errorf("after panic the slot must be released; got %d rows", len(f.rows))
 	}
-
-	_, _ = s.DB.NewRaw("DELETE FROM idempotency_keys WHERE key=?", key).Exec(context.Background())
-}
-
-// TestIdempotency_InFlight409 — two truly concurrent requests with
-// the same Idempotency-Key + same body: exactly ONE handler
-// invocation; the second caller gets 409 IDEMPOTENCY_IN_FLIGHT.
-//
-// We force the race window with a sleep inside the handler so the
-// second goroutine's Claim hits the row while ResponseComplete=false.
-func TestIdempotency_InFlight409(t *testing.T) {
-	s := requireStore(t)
-	defer s.Close()
-
-	var handlerRunning sync.WaitGroup
-	handlerRunning.Add(1)
-	release := make(chan struct{})
-	var handlerEntries atomic.Int32
-
-	handler := func(c *gin.Context) {
-		// First entry: signal that we're running, then wait for the
-		// second goroutine to have hit the middleware. After that we
-		// finish normally.
-		if handlerEntries.Add(1) == 1 {
-			handlerRunning.Done()
-			<-release
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	}
-	r := makeApp(s, handler)
-
-	key := "idem-inflight-" + time.Now().Format("20060102150405.000000000")
-	body := `{"x":4}`
-
-	var w1, w2 *httptest.ResponseRecorder
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		w1 = postJSON(r, key, body)
-	}()
-	go func() {
-		defer wg.Done()
-		// Wait for the first goroutine to enter the handler so the
-		// row exists with ResponseComplete=false. Then we fire.
-		handlerRunning.Wait()
-		// Tiny grace to ensure the first one's row is committed to DB
-		// (Claim does INSERT before the handler runs, so this should
-		// be a no-op but reduces flakiness on slow CI).
-		time.Sleep(50 * time.Millisecond)
-		w2 = postJSON(r, key, body)
-		close(release) // let the first one finish
-	}()
-	wg.Wait()
-
-	// At least one must be the in-flight 409; the other the eventual 200.
-	codes := []int{w1.Code, w2.Code}
-	var got200, got409 int
-	for _, c := range codes {
-		switch c {
-		case 200:
-			got200++
-		case 409:
-			got409++
-		}
-	}
-	if got200 != 1 || got409 != 1 {
-		t.Fatalf("expected exactly one 200 and one 409, got w1=%d w2=%d", w1.Code, w2.Code)
-	}
-
-	// The 409 response must carry the IDEMPOTENCY_IN_FLIGHT code so
-	// clients can branch on it (and not retry instantly).
-	var conflictBody *httptest.ResponseRecorder
-	if w1.Code == 409 {
-		conflictBody = w1
-	} else {
-		conflictBody = w2
-	}
-	if !bytes.Contains(conflictBody.Body.Bytes(), []byte("IDEMPOTENCY_IN_FLIGHT")) {
-		t.Errorf("409 body missing IDEMPOTENCY_IN_FLIGHT code: %s", conflictBody.Body.String())
-	}
-
-	// Handler executed exactly once.
-	if a := handlerEntries.Load(); a != 1 {
-		t.Errorf("expected exactly 1 handler invocation, got %d", a)
-	}
-
-	// Cleanup
-	_, _ = s.DB.NewRaw("DELETE FROM idempotency_keys WHERE key=?", key).Exec(context.Background())
-}
-
-// Sanity: confirm the ErrIdempotencyBodyMismatch path still fires
-// after our middleware changes. (Belt-and-suspenders — exercised by
-// shell tests too, but pinning it here catches regressions in unit-
-// test speed.)
-func TestIdempotency_BodyMismatchAfterCache(t *testing.T) {
-	s := requireStore(t)
-	defer s.Close()
-
-	handler := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) }
-	r := makeApp(s, handler)
-
-	key := "idem-bm-" + time.Now().Format("20060102150405.000000000")
-	if w := postJSON(r, key, `{"a":1}`); w.Code != 200 {
-		t.Fatalf("first: %d", w.Code)
-	}
-	w2 := postJSON(r, key, `{"a":2}`)
-	if w2.Code != 422 {
-		t.Errorf("expected 422 for body mismatch, got %d", w2.Code)
-	}
-
-	// Sentinel error sanity (not surfaced through HTTP but pin the
-	// store-level guarantee that the middleware relies on).
-	// body_hash CHECK constraint requires 64-char lowercase hex.
-	const validButDifferentHash = "deadbeef" + "00000000000000000000000000000000000000000000000000000000"
-	_, err := s.IdempotencyClaim(context.Background(), key, "/test", validButDifferentHash)
-	if !errors.Is(err, store.ErrIdempotencyBodyMismatch) {
-		t.Errorf("expected ErrIdempotencyBodyMismatch, got %v", err)
-	}
-
-	_, _ = s.DB.NewRaw("DELETE FROM idempotency_keys WHERE key=?", key).Exec(context.Background())
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -45,7 +45,7 @@ export function CancelDialog({
       qc.invalidateQueries({ queryKey: ["portal", "licenses"] })
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -169,7 +169,7 @@ export function ChangePlanDialog({ license, onClose }: { license: PortalLicense;
     },
     onError: (e: Error) => {
       setConfirming(null)
-      showToast(e.message, "error")
+      toastError(e)
     },
   })
 

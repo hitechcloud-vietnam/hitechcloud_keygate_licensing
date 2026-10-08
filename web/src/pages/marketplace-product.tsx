@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, ArrowLeft, BookOpen, Download, Github, Globe, Package } from "lucide-react"
 import { useState } from "react"
-import { Link, useParams } from "react-router-dom"
+import { Link, useLocation, useParams } from "react-router-dom"
 import { ProductCard } from "@/components/product-card"
 import { StarRating, StarRatingInput } from "@/components/star-rating"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,6 +25,7 @@ import { useAuth } from "@/hooks/use-auth"
 import { useI18n } from "@/i18n"
 import type { MarketplaceProduct, PublicReview } from "@/lib/api"
 import { ApiError, marketplace, portal } from "@/lib/api"
+import { attributionFromSearch, withAttribution } from "@/lib/attribution"
 import { formatMinor } from "@/lib/money"
 import { formatDate } from "@/lib/utils"
 
@@ -98,6 +99,11 @@ export default function MarketplaceProductPage() {
 
 function ProductDetail({ product }: { product: MarketplaceProduct }) {
   const { t } = useI18n()
+  // The attribution the visitor arrived with. It follows every Buy
+  // button to the checkout page, which forwards it on to the server
+  // /pay route — where the sale is actually attributed.
+  const { search } = useLocation()
+  const attribution = attributionFromSearch(search)
   const images = product.images || []
   const hasLinks = Boolean(
     product.documentation_url || product.website_url || product.repository_url || product.download_url,
@@ -214,7 +220,9 @@ function ProductDetail({ product }: { product: MarketplaceProduct }) {
                           <td className="py-3 text-right">
                             {p.checkout_id ? (
                               <Button asChild size="sm">
-                                <Link to={`/checkout/${p.checkout_id}`}>{t("marketplace.buy")}</Link>
+                                <Link to={withAttribution(`/checkout/${p.checkout_id}`, attribution)}>
+                                  {t("marketplace.buy")}
+                                </Link>
                               </Button>
                             ) : (
                               <span className="text-xs text-muted-foreground">—</span>
@@ -523,9 +531,9 @@ function ReviewForm({ product, onChanged }: { product: MarketplaceProduct; onCha
         // Already reviewed this product: swap the form into edit mode.
         setMode("edit")
         setNotice(t("reviews.duplicateNote"))
-        showToast(t("reviews.duplicateNote"), "error")
+        toastError(e, t("reviews.duplicateNote"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -554,7 +562,7 @@ function ReviewForm({ product, onChanged }: { product: MarketplaceProduct; onCha
         setKnownTitle(undefined)
         setNotice(null)
       }
-      showToast(e.message, "error")
+      toastError(e)
     },
   })
 
@@ -579,7 +587,7 @@ function ReviewForm({ product, onChanged }: { product: MarketplaceProduct; onCha
         setNotice(null)
         setConfirmingDelete(false)
       }
-      showToast(e.message, "error")
+      toastError(e)
     },
   })
 

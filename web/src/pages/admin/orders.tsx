@@ -1,8 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { Calculator, Eye, Plus } from "lucide-react"
+import { Calculator, Eye, Plus, ShoppingCart } from "lucide-react"
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { showToast } from "@/components/toast"
+import { ListEmptyState } from "@/components/empty-state"
+import { showToast, toastError } from "@/components/toast"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -10,7 +11,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -88,6 +88,24 @@ export default function OrdersPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : orders.length === 0 ? (
+            // The ledger fills from paid checkouts, so an empty view
+            // explains that — while a filtered one offers the clear.
+            // The price preview is the one thing to do while waiting.
+            <ListEmptyState
+              icon={ShoppingCart}
+              title={t("orders.empty")}
+              description={t("empty.orders.desc")}
+              action={{ label: t("orders.quoteOpen"), onClick: () => setQuoting(true) }}
+              filtered={search !== "" || statusFilter !== ""}
+              filteredTitle={t("filter.noMatches")}
+              filteredDescription={t("empty.filteredDesc")}
+              clearLabel={t("common.clearFilters")}
+              onClearFilters={() => {
+                setSearch("")
+                setStatusFilter("")
+              }}
+            />
           ) : (
             <>
               <DataTable>
@@ -103,7 +121,6 @@ export default function OrdersPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {orders.length === 0 && <DataTableEmpty colSpan={7} message={t("orders.empty")} />}
                   {orders.map((o: Order) => (
                     <DataTableRow key={o.id}>
                       <DataTableCell>
@@ -196,7 +213,7 @@ function QuoteDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
   const quoteMut = useMutation({
     mutationFn: (body: QuoteRequest) => admin.quoteOrder(body),
     onSuccess: (res) => setResult(res),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const setLine = (key: number, patch: Partial<QuoteLineForm>) =>

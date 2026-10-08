@@ -1,17 +1,20 @@
 import { useQuery } from "@tanstack/react-query"
 import { AlertCircle, CreditCard, Tag } from "lucide-react"
 import { useState } from "react"
-import { useParams } from "react-router-dom"
+import { useLocation, useParams } from "react-router-dom"
+import { LanguageSwitcher } from "@/components/language-switcher"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import { useAuth } from "@/hooks/use-auth"
 import { useSiteConfig } from "@/hooks/use-site-config"
 import { type TranslationKeys, useI18n } from "@/i18n"
 import type { CheckoutQuoteRequest, CheckoutQuoteResult } from "@/lib/api"
 import { ApiError, checkout } from "@/lib/api"
+import { attributionFromSearch, attributionQuery } from "@/lib/attribution"
 import { COUNTRY_CODES, countryDisplayName } from "@/lib/countries"
 import { formatBps, formatMinor } from "@/lib/money"
 
@@ -24,10 +27,19 @@ export default function CheckoutPage() {
   const { t, locale } = useI18n()
   const { site_name, logo_url, attribution_text, attribution_url } = useSiteConfig()
   const { checkout_id: checkoutId = "" } = useParams()
+  const { search } = useLocation()
+  // Signed-in buyers get wholesale pricing through their email
+  // (attribution.go: the buyer email is the wholesale authority), so
+  // it rides the /pay request whenever we know it.
+  const { user } = useAuth()
 
-  const [country, setCountry] = useState("")
-  const [couponInput, setCouponInput] = useState("")
-  const [committedCoupon, setCommittedCoupon] = useState("")
+  // A link may arrive with the pricing terms already named — a partner
+  // sharing ?coupon_code= or a country-pinned campaign. Pre-fill from
+  // the URL so what the visitor was promised is what gets quoted.
+  const initialParams = new URLSearchParams(search)
+  const [country, setCountry] = useState(initialParams.get("country") || "")
+  const [couponInput, setCouponInput] = useState(initialParams.get("coupon_code") || "")
+  const [committedCoupon, setCommittedCoupon] = useState(initialParams.get("coupon_code") || "")
   const [couponError, setCouponError] = useState("")
 
   const quote = useQuery({
@@ -64,18 +76,26 @@ export default function CheckoutPage() {
     const qs = new URLSearchParams()
     if (committedCoupon) qs.set("coupon_code", committedCoupon)
     if (country) qs.set("country", country)
-    const s = qs.toString()
-    // /pay/:checkout_id is a server route (a 302 to Stripe), not a React
-    // page — navigate the browser there rather than routing in-app.
-    window.location.assign(`/pay/${checkoutId}${s ? `?${s}` : ""}`)
+    // Attribution the visitor arrived with — ?reseller_code= / ?ref= on
+    // this URL, or the htc_ref cookie — plus the buyer's email when
+    // signed in, must reach the /pay request: that is where the order
+    // is attributed and wholesale pricing is resolved. /pay/:checkout_id
+    // is a server route (a 302 to Stripe), not a React page — navigate
+    // the browser there rather than routing in-app.
+    const attribution = attributionQuery(attributionFromSearch(search, user?.email))
+    const query = [qs.toString(), attribution].filter(Boolean).join("&")
+    window.location.assign(`/pay/${checkoutId}${query ? `?${query}` : ""}`)
   }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="border-b bg-card">
-        <div className="max-w-3xl mx-auto flex items-center gap-2 h-14 px-4">
-          <img src={logo_url || "/logo.svg"} alt={site_name} className="h-6 w-6" />
-          <span className="font-bold text-lg tracking-tight">{site_name}</span>
+        <div className="max-w-3xl mx-auto flex items-center justify-between gap-2 h-14 px-4">
+          <div className="flex items-center gap-2">
+            <img src={logo_url || "/logo.svg"} alt={site_name} className="h-6 w-6" />
+            <span className="font-bold text-lg tracking-tight">{site_name}</span>
+          </div>
+          <LanguageSwitcher />
         </div>
       </header>
 

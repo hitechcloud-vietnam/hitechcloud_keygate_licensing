@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, Copy, Link2, Pencil, Plus, Send, Trash2 } from "lucide-react"
 import { useState } from "react"
-import { showToast } from "@/components/toast"
+import { ListEmptyState } from "@/components/empty-state"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,7 +19,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -73,7 +73,7 @@ export default function PortalWebhooksPage() {
       showToast(t("portal.whDeleted"), "success")
       setDeleting(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const toggleMut = useMutation({
@@ -82,13 +82,13 @@ export default function PortalWebhooksPage() {
       qc.invalidateQueries({ queryKey: ["portal", "webhooks"] })
       showToast(t("portal.whUpdated"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const testMut = useMutation({
     mutationFn: (id: string) => portal.testPortalWebhook(id),
     onSuccess: () => showToast(t("portal.whTestSent"), "success"),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -107,6 +107,15 @@ export default function PortalWebhooksPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : webhooks.length === 0 ? (
+            // No filters on this page — an empty table is a first-run
+            // story: say what webhooks are for, offer the create.
+            <ListEmptyState
+              icon={Link2}
+              title={t("portal.whEmpty")}
+              description={t("empty.webhooks.desc")}
+              action={{ label: t("portal.whNew"), onClick: () => setCreating(true) }}
+            />
           ) : (
             <>
               <DataTable>
@@ -121,7 +130,6 @@ export default function PortalWebhooksPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {webhooks.length === 0 && <DataTableEmpty colSpan={6} message={t("portal.whEmpty")} />}
                   {webhooks.map((wh: PortalWebhook) => (
                     <DataTableRow key={wh.id}>
                       <DataTableCell className="font-mono text-xs max-w-[220px] truncate">{wh.url}</DataTableCell>
@@ -281,7 +289,7 @@ function WebhookFormDialog({
       return res.secret
     },
     onSuccess: (secret) => onSaved(secret),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const validUrl = /^https?:\/\/.+/i.test(url.trim())

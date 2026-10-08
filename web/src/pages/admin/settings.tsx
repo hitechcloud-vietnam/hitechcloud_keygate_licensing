@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowUpCircle, Check, RefreshCw, Send, Shield, Trash2, UserPlus } from "lucide-react"
 import { useEffect, useState } from "react"
 import { DEFAULT_REMINDER_DAYS, ReminderDaysInput } from "@/components/reminder-days-input"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -198,14 +198,14 @@ export default function SettingsPage() {
       })
       showToast(t("settings.saved"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const [testTo, setTestTo] = useState("")
   const testEmailMut = useMutation({
     mutationFn: () => admin.sendTestEmail(testTo.trim() || undefined),
     onSuccess: () => showToast(t("settings.testEmailSent"), "success"),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   // A blank field means "leave the stored secret alone", so removing a
@@ -222,7 +222,7 @@ export default function SettingsPage() {
       })
       showToast(t("settings.secretCleared"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const { data: versionData } = useQuery({
@@ -807,13 +807,13 @@ function TeamManagement() {
       qc.invalidateQueries({ queryKey: ["admin", "team"] })
       setEmail("")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const removeMut = useMutation({
     mutationFn: (id: string) => admin.removeTeamMember(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "team"] }),
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const { items: members, total, totalPages } = pg.from(data, data?.members)

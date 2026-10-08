@@ -1,12 +1,13 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react"
 import en from "./locales/en"
+import vi from "./locales/vi"
 import zh from "./locales/zh"
 
-type Locale = "en" | "zh"
+type Locale = "en" | "vi" | "zh"
 type TranslationKeys = keyof typeof en
 type Translations = Record<TranslationKeys, string>
 
-const locales: Record<Locale, Translations> = { en, zh }
+const locales: Record<Locale, Translations> = { en, vi, zh }
 
 interface I18nContextType {
   locale: Locale
@@ -23,6 +24,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem(STORAGE_KEY) as Locale
     if (saved && locales[saved]) return saved
     const browserLang = navigator.language.toLowerCase()
+    if (browserLang.startsWith("vi")) return "vi"
     if (browserLang.startsWith("zh")) return "zh"
     return "en"
   })

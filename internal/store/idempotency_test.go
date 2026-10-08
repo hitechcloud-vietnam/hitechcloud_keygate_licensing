@@ -12,33 +12,27 @@ import (
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/store"
 )
 
-// TestIdempotencyClaim_Atomic verifies that under concurrent claims of
-// the same (key, endpoint, body_hash), exactly ONE goroutine wins (gets
-// nil/nil and proceeds to run the handler) and all others get back the
-// existing in-flight row. This is the core safety property of the
-// idempotency layer; if it ever regresses, two retries can both run
-// `/license/activate` and double-count against `max_activations`.
-func TestIdempotencyClaim_Atomic(t *testing.T) {
+// TestBeginIdempotent_ConcurrentClaim verifies that under concurrent
+// claims of the same (scope, key, request hash), exactly ONE goroutine
+// wins the claim (created=true) and every other sees the in-progress
+// refusal. This is the core safety property: if it regresses, two retries
+// can both run a mutation and double-apply its side effect.
+func TestBeginIdempotent_ConcurrentClaim(t *testing.T) {
 	s := setupTestDB(t)
 	ctx := context.Background()
 
 	const concurrency = 32
+	scope := "concurrent-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	const key = "atomic-claim-test"
-	const endpoint = "/api/v1/license/activate"
-	const bodyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const reqHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	// Clean up any prior row from a previous run.
 	defer func() {
-		_, _ = s.DB.NewRaw(
-			`DELETE FROM idempotency_keys WHERE key = ? AND endpoint = ?`,
-			key, endpoint).Exec(ctx)
+		_, _ = s.DB.NewRaw(`DELETE FROM idempotency_keys WHERE scope = ? AND idempotency_key = ?`, scope, key).Exec(ctx)
 	}()
-	_, _ = s.DB.NewRaw(
-		`DELETE FROM idempotency_keys WHERE key = ? AND endpoint = ?`,
-		key, endpoint).Exec(ctx)
+	_, _ = s.DB.NewRaw(`DELETE FROM idempotency_keys WHERE scope = ? AND idempotency_key = ?`, scope, key).Exec(ctx)
 
 	var winners atomic.Int32
-	var inflight atomic.Int32
+	var inprogress atomic.Int32
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -47,15 +41,21 @@ func TestIdempotencyClaim_Atomic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			row, err := s.IdempotencyClaim(ctx, key, endpoint, bodyHash)
-			if err != nil {
-				t.Errorf("unexpected err: %v", err)
-				return
-			}
-			if row == nil {
+			rec, created, err := s.BeginIdempotent(ctx, scope, key, reqHash)
+			switch {
+			case err != nil:
+				if errors.Is(err, store.ErrIdempotencyInProgress) {
+					inprogress.Add(1)
+				} else {
+					t.Errorf("unexpected err: %v", err)
+				}
+			case created:
 				winners.Add(1)
-			} else {
-				inflight.Add(1)
+				if rec == nil {
+					t.Error("a created claim must return the record (for its id)")
+				}
+			default:
+				t.Errorf("no goroutine should see a replay on a fresh slot (rec=%v)", rec)
 			}
 		}()
 	}
@@ -63,111 +63,143 @@ func TestIdempotencyClaim_Atomic(t *testing.T) {
 	wg.Wait()
 
 	if w := winners.Load(); w != 1 {
-		t.Fatalf("exactly one goroutine must claim the slot; got %d winners (and %d in-flight)", w, inflight.Load())
+		t.Fatalf("exactly one goroutine must claim the slot; got %d winners", w)
 	}
-	if i := inflight.Load(); i != concurrency-1 {
-		t.Fatalf("all other goroutines must see in-flight; got %d (expected %d)", i, concurrency-1)
-	}
-}
-
-// TestIdempotencyClaim_BodyMismatch verifies that reusing a key with a
-// different body returns ErrIdempotencyBodyMismatch, never silently
-// accepts the second body, and never overwrites the first.
-func TestIdempotencyClaim_BodyMismatch(t *testing.T) {
-	s := setupTestDB(t)
-	ctx := context.Background()
-	key := "body-mismatch-" + strconv.FormatInt(int64(testTime()), 10)
-	endpoint := "/api/v1/license/activate"
-	const hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	const hashB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-	defer func() {
-		_, _ = s.DB.NewRaw(
-			`DELETE FROM idempotency_keys WHERE key = ? AND endpoint = ?`,
-			key, endpoint).Exec(ctx)
-	}()
-
-	// First claim: succeeds.
-	if row, err := s.IdempotencyClaim(ctx, key, endpoint, hashA); err != nil || row != nil {
-		t.Fatalf("first claim should succeed; got row=%v err=%v", row, err)
-	}
-
-	// Reuse same key with different body → conflict.
-	row, err := s.IdempotencyClaim(ctx, key, endpoint, hashB)
-	if !errors.Is(err, store.ErrIdempotencyBodyMismatch) {
-		t.Fatalf("expected ErrIdempotencyBodyMismatch, got row=%v err=%v", row, err)
+	if i := inprogress.Load(); i != concurrency-1 {
+		t.Fatalf("all other goroutines must see in-progress; got %d (expected %d)", i, concurrency-1)
 	}
 }
 
-// TestIdempotencyComplete_Replay verifies that after Complete, a second
-// claim with the same (key, endpoint, hash) returns the cached row with
-// ResponseComplete=true.
-func TestIdempotencyComplete_Replay(t *testing.T) {
+// TestBeginIdempotent_Replay stores a response and verifies a retry with
+// the same (scope, key, request hash) returns the stored status+body for
+// replay instead of re-running the handler.
+func TestBeginIdempotent_Replay(t *testing.T) {
 	s := setupTestDB(t)
 	ctx := context.Background()
-	key := "replay-" + strconv.FormatInt(int64(testTime()), 10)
-	endpoint := "/api/v1/license/activate"
-	const hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-
+	scope := "replay-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	const key = "replay-test"
+	const reqHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	defer func() {
-		_, _ = s.DB.NewRaw(
-			`DELETE FROM idempotency_keys WHERE key = ? AND endpoint = ?`,
-			key, endpoint).Exec(ctx)
+		_, _ = s.DB.NewRaw(`DELETE FROM idempotency_keys WHERE scope = ? AND idempotency_key = ?`, scope, key).Exec(ctx)
 	}()
 
-	row, err := s.IdempotencyClaim(ctx, key, endpoint, hash)
-	if err != nil || row != nil {
-		t.Fatalf("claim: row=%v err=%v", row, err)
+	rec, created, err := s.BeginIdempotent(ctx, scope, key, reqHash)
+	if err != nil || !created {
+		t.Fatalf("claim: rec=%v created=%v err=%v", rec, created, err)
 	}
-	if err := s.IdempotencyComplete(ctx, key, endpoint, 200, `{"success":true}`); err != nil {
-		t.Fatalf("complete: %v", err)
+	if err := s.FinishIdempotent(ctx, rec.ID, 200, []byte(`{"success":true}`)); err != nil {
+		t.Fatalf("finish: %v", err)
 	}
 
-	replay, err := s.IdempotencyClaim(ctx, key, endpoint, hash)
+	replay, created, err := s.BeginIdempotent(ctx, scope, key, reqHash)
 	if err != nil {
 		t.Fatalf("replay claim: %v", err)
 	}
+	if created {
+		t.Fatal("replay must NOT report created; the slot is done")
+	}
 	if replay == nil {
-		t.Fatalf("replay must return existing row, got nil (slot was re-claimed!)")
+		t.Fatal("replay must return the stored record")
 	}
-	if !replay.ResponseComplete {
-		t.Fatalf("replay must show ResponseComplete=true")
+	if replay.State != "done" {
+		t.Fatalf("replay state = %q, want done", replay.State)
 	}
-	if replay.ResponseStatus != 200 || replay.ResponseBody != `{"success":true}` {
+	if replay.ResponseStatus != 200 || string(replay.ResponseBody) != `{"success":true}` {
 		t.Fatalf("cached response wrong: status=%d body=%q", replay.ResponseStatus, replay.ResponseBody)
 	}
 }
 
-// TestIdempotencyAbandon_FreesSlot verifies that abandoning a slot
-// (handler crashed, 5xx) lets the next claim succeed fresh — otherwise
-// retries get stuck IN_FLIGHT until the 24h TTL.
-func TestIdempotencyAbandon_FreesSlot(t *testing.T) {
+// TestBeginIdempotent_ReusedKey verifies that reusing a key with a
+// different request hash returns ErrIdempotencyKeyReused — never silently
+// accepts the second request, never overwrites the first.
+func TestBeginIdempotent_ReusedKey(t *testing.T) {
 	s := setupTestDB(t)
 	ctx := context.Background()
-	key := "abandon-" + strconv.FormatInt(int64(testTime()), 10)
-	endpoint := "/api/v1/license/activate"
-	const hash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-
+	scope := "reused-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	const key = "reused-test"
+	const hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const hashB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	defer func() {
-		_, _ = s.DB.NewRaw(
-			`DELETE FROM idempotency_keys WHERE key = ? AND endpoint = ?`,
-			key, endpoint).Exec(ctx)
+		_, _ = s.DB.NewRaw(`DELETE FROM idempotency_keys WHERE scope = ? AND idempotency_key = ?`, scope, key).Exec(ctx)
 	}()
 
-	if row, err := s.IdempotencyClaim(ctx, key, endpoint, hash); err != nil || row != nil {
-		t.Fatalf("claim: row=%v err=%v", row, err)
+	if _, created, err := s.BeginIdempotent(ctx, scope, key, hashA); err != nil || !created {
+		t.Fatalf("first claim: created=%v err=%v", created, err)
 	}
-	s.IdempotencyAbandon(ctx, key, endpoint)
-
-	// Next claim should succeed again (fresh slot).
-	row, err := s.IdempotencyClaim(ctx, key, endpoint, hash)
-	if err != nil || row != nil {
-		t.Fatalf("re-claim after abandon should succeed; got row=%v err=%v", row, err)
+	if _, _, err := s.BeginIdempotent(ctx, scope, key, hashB); !errors.Is(err, store.ErrIdempotencyKeyReused) {
+		t.Fatalf("expected ErrIdempotencyKeyReused, got err=%v", err)
 	}
 }
 
-// testTime returns a unique-ish time stamp for test key uniqueness
-// when tests run in parallel.
-func testTime() int64 {
-	return time.Now().UnixNano()
+// TestBeginIdempotent_InProgress verifies that a second claim while the
+// first is still running (not yet finished) returns
+// ErrIdempotencyInProgress so the client retries with backoff.
+func TestBeginIdempotent_InProgress(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+	scope := "inprog-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	const key = "inprogress-test"
+	const reqHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	defer func() {
+		_, _ = s.DB.NewRaw(`DELETE FROM idempotency_keys WHERE scope = ? AND idempotency_key = ?`, scope, key).Exec(ctx)
+	}()
+
+	if _, created, err := s.BeginIdempotent(ctx, scope, key, reqHash); err != nil || !created {
+		t.Fatalf("claim: created=%v err=%v", created, err)
+	}
+	if _, _, err := s.BeginIdempotent(ctx, scope, key, reqHash); !errors.Is(err, store.ErrIdempotencyInProgress) {
+		t.Fatalf("expected ErrIdempotencyInProgress, got err=%v", err)
+	}
+}
+
+// TestReleaseIdempotent_FreesSlot verifies that releasing an unfinished
+// slot (handler failed / 5xx) lets the next claim succeed fresh instead
+// of being stuck in-progress until the TTL.
+func TestReleaseIdempotent_FreesSlot(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+	scope := "release-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	const key = "release-test"
+	const reqHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	defer func() {
+		_, _ = s.DB.NewRaw(`DELETE FROM idempotency_keys WHERE scope = ? AND idempotency_key = ?`, scope, key).Exec(ctx)
+	}()
+
+	rec, created, err := s.BeginIdempotent(ctx, scope, key, reqHash)
+	if err != nil || !created {
+		t.Fatalf("claim: created=%v err=%v", created, err)
+	}
+	if err := s.ReleaseIdempotent(ctx, rec.ID); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if _, created, err := s.BeginIdempotent(ctx, scope, key, reqHash); err != nil || !created {
+		t.Fatalf("re-claim after release should succeed fresh; created=%v err=%v", created, err)
+	}
+}
+
+// TestExpireIdempotencyKeys drops rows past their expiry so the table
+// does not grow without bound.
+func TestExpireIdempotencyKeys(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+	scope := "expire-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	const key = "expire-test"
+	const reqHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	defer func() {
+		_, _ = s.DB.NewRaw(`DELETE FROM idempotency_keys WHERE scope = ? AND idempotency_key = ?`, scope, key).Exec(ctx)
+	}()
+
+	rec, _, err := s.BeginIdempotent(ctx, scope, key, reqHash)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := s.DB.NewRaw(`UPDATE idempotency_keys SET expires_at = now() - interval '1 hour' WHERE id = ?`, rec.ID).Exec(ctx); err != nil {
+		t.Fatalf("force expiry: %v", err)
+	}
+	if n, err := s.ExpireIdempotencyKeys(ctx, time.Now()); err != nil || n < 1 {
+		t.Fatalf("ExpireIdempotencyKeys: n=%d err=%v (want >= 1)", n, err)
+	}
+	if _, created, err := s.BeginIdempotent(ctx, scope, key, reqHash); err != nil || !created {
+		t.Fatalf("claim after expiry should succeed fresh; created=%v err=%v", created, err)
+	}
 }

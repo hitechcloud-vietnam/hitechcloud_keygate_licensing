@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useI18nOptional } from "@/i18n"
+import { bindErrorTranslator, errorMessage, markErrorHandled, withRequestRef } from "@/lib/errors"
 
 interface Toast {
   id: string
@@ -20,6 +21,16 @@ const SUCCESS_MS = 5_000
 
 const ToastContext = createContext<ToastContextType>({ addToast: () => {} })
 
+// How many toasts have been raised so far. The global mutation error
+// hook defers its fallback toast by a tick and skips it when this
+// moved in the meantime — a page's own curated message already covered
+// the failure, and one failure must produce one toast, not two.
+let raisedToasts = 0
+
+export function toastCount(): number {
+  return raisedToasts
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const { t } = useI18nOptional()
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -36,6 +47,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const addToast = useCallback(
     (message: string, type: "error" | "success" = "error") => {
+      raisedToasts++
       // The id is the message itself: a failure that repeats — two saves
       // rejected by the same rule, a retried request — shows once and has
       // its timer restarted, instead of stacking copies that push the
@@ -111,9 +123,24 @@ export function showToast(message: string, type: "error" | "success" = "error") 
   if (globalAddToast) globalAddToast(message, type)
 }
 
+// toastError raises the one error toast for a failure (plan §90): the
+// curated message when the caller has one — with the request id
+// appended — otherwise the fallback shape from lib/errors. It also
+// marks the error handled so the global mutation hook stays quiet.
+export function toastError(e: unknown, message?: string) {
+  markErrorHandled(e)
+  showToast(message ? withRequestRef(message, e) : errorMessage(e), "error")
+}
+
 /** Bridge component that wires up the global toast ref inside the React tree */
 export function ToastBridge() {
   const { addToast } = useToast()
+  // Error strings (lib/errors) translate through the active locale too,
+  // so a failure toast reads like the rest of the page around it.
+  const { t } = useI18nOptional()
+  useEffect(() => {
+    bindErrorTranslator(t)
+  }, [t])
   useEffect(() => {
     setGlobalToast(addToast)
   }, [addToast])

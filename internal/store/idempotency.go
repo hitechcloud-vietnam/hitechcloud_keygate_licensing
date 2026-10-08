@@ -6,120 +6,192 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 )
 
-// Idempotency sentinel errors. Surfaced by the middleware to map onto
-// HTTP responses; the handler logic never sees them directly.
+// ─── Idempotency (plan §36) ───
+//
+// A cache of completed mutation responses keyed by (scope, idempotency
+// key) so a client retry with the same Idempotency-Key gets the original
+// answer without re-running the handler (and without a duplicate side
+// effect). Stripe / Mailgun / GitHub conventions.
+//
+// scope is the CALLER identity ("user:123", "api_key:abc", ...), so two
+// different callers can use the same Idempotency-Key without colliding —
+// the key is only unique within a scope. The composite
+// UNIQUE (scope, idempotency_key) enforces that in the database.
+//
+// Lifecycle of a claimed slot:
+//
+//	BeginIdempotent  -->  in_progress  -->  FinishIdempotent  -->  done
+//	                        |
+//	                        +-->  ReleaseIdempotent (handler failed / 5xx)
+//
+// A retry that lands while the original is in_progress is refused
+// 409 IDEMPOTENCY_IN_PROGRESS; a retry after it is done gets the stored
+// response replayed; a retry that reuses the key with a DIFFERENT body is
+// refused 409 IDEMPOTENCY_KEY_REUSED. The HTTP mapping lives in
+// middleware.Idempotency; the store only reports which case occurred via
+// the sentinels below.
+
+// Idempotency-state spellings, matching the CHECK constraint on
+// idempotency_keys.state.
+const (
+	idempotencyStateInProgress = "in_progress"
+	idempotencyStateDone       = "done"
+)
+
+// IdempotencyTTL is how long a completed (or in-flight) slot is kept
+// before ExpireIdempotencyKeys may drop it. 24h matches Stripe's standard
+// and is generous enough that an out-of-hours retry still replays while
+// being small enough that the table does not grow without bound. The
+// row's expires_at is stamped created_at+IdempotencyTTL at claim time.
+const IdempotencyTTL = 24 * time.Hour
+
+// IdempotencyMaxResponseBody caps the response body cached per slot so one
+// misbehaving handler cannot fill the table with megabytes. SDK mutation
+// responses are far smaller; anything beyond this is truncated (the live
+// response to the client is unaffected).
+const IdempotencyMaxResponseBody = 64 * 1024
+
+// Sentinel errors from BeginIdempotent. The middleware maps them onto the
+// 409s documented above; nothing else needs to see them.
 var (
-	// ErrIdempotencyInFlight: same (key, endpoint) is currently being
-	// processed by a concurrent request — the original hasn't yet
-	// stored its response. The client should retry with backoff.
-	ErrIdempotencyInFlight = errors.New("idempotency key in-flight")
+	// ErrIdempotencyKeyReused: the same (scope, key) was already used
+	// with a different request hash. Reusing a key for a semantically
+	// different request is a client bug — refuse rather than guess.
+	ErrIdempotencyKeyReused = errors.New("idempotency key reused with a different request")
 
-	// ErrIdempotencyBodyMismatch: same key was used previously with a
-	// different body. Reusing keys across different requests is a
-	// programming error; we refuse rather than guess intent.
-	ErrIdempotencyBodyMismatch = errors.New("idempotency key reused with a different request body")
+	// ErrIdempotencyInProgress: an earlier request with this (scope, key)
+	// is still running and has not yet stored its response. The client
+	// should retry with backoff.
+	ErrIdempotencyInProgress = errors.New("idempotency key still in progress")
 )
 
-// IdempotencyClaim attempts to register (key, endpoint, bodyHash) as
-// the in-flight owner of this idempotency slot. The semantics:
-//
-//   - Returns (existing-row, nil) if a row already exists. The caller
-//     inspects `ResponseComplete`:
-//
-//   - true  → replay the cached response, do not run the handler.
-//
-//   - false → another request is mid-flight, return 409 to the
-//     client and let them retry.
-//
-//   - Returns (nil, nil) if the slot was successfully claimed. The caller
-//     runs the handler, captures the response, then calls
-//     IdempotencyComplete.
-//
-//   - Returns (nil, ErrIdempotencyBodyMismatch) if (key, endpoint)
-//     already exists with a DIFFERENT bodyHash — the client reused the
-//     key for a semantically different request, which is a bug.
-//
-// Concurrency safety: we use INSERT ... ON CONFLICT DO NOTHING + a
-// followup SELECT, both atomic at the SQL layer. A race between two
-// concurrent claims of the same key is resolved by exactly ONE row's
-// INSERT succeeding; the other sees the row via SELECT and returns
-// in-flight.
-func (s *Store) IdempotencyClaim(ctx context.Context, key, endpoint, bodyHash string) (*model.IdempotencyKey, error) {
-	// Try to insert a fresh row.
-	res, err := s.DB.NewRaw(`
-		INSERT INTO idempotency_keys (key, endpoint, body_hash, response_status, response_body, response_complete, created_at, expires_at)
-		VALUES (?, ?, ?, 0, '', false, now(), now() + interval '24 hours')
-		ON CONFLICT (key, endpoint) DO NOTHING
-	`, key, endpoint, bodyHash).Exec(ctx)
-	if err != nil {
-		return nil, err
-	}
-	rows, _ := res.RowsAffected()
-	if rows == 1 {
-		// We claimed the slot. Caller runs the handler.
-		return nil, nil
-	}
-
-	// Row already existed. Read it back.
-	row := new(model.IdempotencyKey)
-	err = s.DB.NewRaw(`
-		SELECT key, endpoint, body_hash, response_status, response_body, response_complete, created_at, expires_at
-		FROM idempotency_keys
-		WHERE key = ? AND endpoint = ?
-	`, key, endpoint).Scan(ctx, &row.Key, &row.Endpoint, &row.BodyHash, &row.ResponseStatus, &row.ResponseBody, &row.ResponseComplete, &row.CreatedAt, &row.ExpiresAt)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// Extremely rare: the row vanished between INSERT failing
-			// and SELECT — TTL cleanup ran in the gap. Treat as fresh.
-			return nil, nil
-		}
-		return nil, err
-	}
-	if row.BodyHash != bodyHash {
-		return nil, ErrIdempotencyBodyMismatch
-	}
-	return row, nil
+// IdempotencyRecord is one idempotency slot: the request fingerprint that
+// claimed it and, once done, the response to replay. It is a plain scan
+// target (not a bun model) — every read/write here is raw SQL.
+type IdempotencyRecord struct {
+	ID             int64
+	Scope          string
+	IdempotencyKey string
+	RequestHash    string
+	ResponseStatus int
+	ResponseBody   []byte
+	State          string // idempotencyStateInProgress | idempotencyStateDone
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
 }
 
-// IdempotencyComplete writes the final response into the slot. Only the
-// originator (the request that won IdempotencyClaim) should call this.
-func (s *Store) IdempotencyComplete(ctx context.Context, key, endpoint string, status int, body string) error {
-	// Cap body size: HTTP responses for SDK endpoints fit easily under
-	// 64 KiB. Truncating defensively prevents a misbehaving handler
-	// from filling the cache with megabytes.
-	if len(body) > 65536 {
-		body = body[:65536]
+// BeginIdempotent atomically claims (scope, key) for reqHash, or reports
+// what is already there. Exactly one of three things happens:
+//
+//   - (rec, true, nil): the claim was won. rec.ID identifies the fresh
+//     in_progress slot — pass it to FinishIdempotent once the handler has
+//     produced its response, or to ReleaseIdempotent if the handler failed.
+//
+//   - (rec, false, nil): the slot is already done with the SAME request
+//     hash. rec.ResponseStatus / rec.ResponseBody are the stored response
+//     to replay verbatim; do NOT run the handler.
+//
+//   - (nil, false, err): the slot is unusable for this request —
+//     ErrIdempotencyKeyReused (same key, different request hash) or
+//     ErrIdempotencyInProgress (an earlier attempt is still running).
+//
+// Concurrency: the claim is INSERT ... ON CONFLICT (scope, idempotency_key)
+// DO NOTHING RETURNING id. Exactly one concurrent claimant gets the row
+// back and is therefore "created"; the losers fall through to the
+// read-back and land on one of the two refusals (or a replay). The only
+// race left is the row being TTL-cleaned between a losing INSERT and the
+// read-back; that is retried as a fresh claim rather than mis-reported.
+func (s *Store) BeginIdempotent(ctx context.Context, scope, key, reqHash string) (*IdempotencyRecord, bool, error) {
+	// The vanished-row race is vanishingly rare, so two attempts are
+	// plenty: one retry covers the cleanup window.
+	for attempt := 0; attempt < 2; attempt++ {
+		now := time.Now()
+		expiresAt := now.Add(IdempotencyTTL)
+
+		var newID int64
+		err := s.DB.NewRaw(`
+			INSERT INTO idempotency_keys (scope, idempotency_key, request_hash, state, created_at, expires_at)
+			VALUES (?, ?, ?, 'in_progress', ?, ?)
+			ON CONFLICT (scope, idempotency_key) DO NOTHING
+			RETURNING id
+		`, scope, key, reqHash, now, expiresAt).Scan(ctx, &newID)
+		if err == nil {
+			return &IdempotencyRecord{
+				ID: newID, Scope: scope, IdempotencyKey: key, RequestHash: reqHash,
+				State: idempotencyStateInProgress, CreatedAt: now, ExpiresAt: expiresAt,
+			}, true, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, false, err
+		}
+
+		// A row already occupies the slot. Read it back to decide.
+		rec := new(IdempotencyRecord)
+		err = s.DB.NewRaw(`
+			SELECT id, scope, idempotency_key, request_hash,
+			       COALESCE(response_status, 0), COALESCE(response_body, ''::bytea),
+			       state, created_at, expires_at
+			FROM idempotency_keys
+			WHERE scope = ? AND idempotency_key = ?
+		`, scope, key).Scan(ctx,
+			&rec.ID, &rec.Scope, &rec.IdempotencyKey, &rec.RequestHash,
+			&rec.ResponseStatus, &rec.ResponseBody, &rec.State, &rec.CreatedAt, &rec.ExpiresAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // vanished under us — retry the claim
+		}
+		if err != nil {
+			return nil, false, err
+		}
+
+		if rec.RequestHash != reqHash {
+			return nil, false, ErrIdempotencyKeyReused
+		}
+		if rec.State == idempotencyStateDone {
+			return rec, false, nil
+		}
+		return nil, false, ErrIdempotencyInProgress
+	}
+	return nil, false, errors.New("idempotency claim repeatedly raced expiry cleanup; retry")
+}
+
+// FinishIdempotent records the final response for a slot claimed by
+// BeginIdempotent and flips it to done, so later retries replay it. Only
+// the winning claimant calls this. The body is capped at
+// IdempotencyMaxResponseBody.
+func (s *Store) FinishIdempotent(ctx context.Context, id int64, status int, body []byte) error {
+	if len(body) > IdempotencyMaxResponseBody {
+		body = body[:IdempotencyMaxResponseBody]
 	}
 	_, err := s.DB.NewRaw(`
 		UPDATE idempotency_keys
-		SET response_status = ?, response_body = ?, response_complete = true
-		WHERE key = ? AND endpoint = ?
-	`, status, body, key, endpoint).Exec(ctx)
+		SET response_status = ?, response_body = ?, state = 'done'
+		WHERE id = ?
+	`, status, body, id).Exec(ctx)
 	return err
 }
 
-// IdempotencyAbandon deletes a slot the originator failed to complete
-// (panic, context cancel, server crash mid-handler). Called from a
-// defer so the next retry can claim the slot fresh instead of being
-// stuck in IN_FLIGHT until expiry.
-func (s *Store) IdempotencyAbandon(ctx context.Context, key, endpoint string) {
-	// Best effort: failures here are logged at the caller.
-	_, _ = s.DB.NewRaw(`
-		DELETE FROM idempotency_keys
-		WHERE key = ? AND endpoint = ? AND response_complete = false
-	`, key, endpoint).Exec(ctx)
+// ReleaseIdempotent drops an in_progress slot the claimant will never
+// finish (handler panic, context cancel, or a 5xx we refuse to cache), so
+// a retry can claim it fresh instead of being stuck 409
+// IDEMPOTENCY_IN_PROGRESS until the TTL lapses. It never touches a done
+// row — a completed response is worth keeping.
+func (s *Store) ReleaseIdempotent(ctx context.Context, id int64) error {
+	_, err := s.DB.NewRaw(`
+		DELETE FROM idempotency_keys WHERE id = ? AND state = 'in_progress'
+	`, id).Exec(ctx)
+	return err
 }
 
-// IdempotencyPruneExpired drops rows past their TTL. Safe to call on a
-// timer; rowsAffected is informational only.
-func (s *Store) IdempotencyPruneExpired(ctx context.Context) (int64, error) {
+// ExpireIdempotencyKeys drops slots whose expires_at is before the given
+// instant. The cleanup hook a background timer calls (see
+// IdempotencyPruneExpired for the now() convenience). Returns how many
+// rows went, purely for observability.
+func (s *Store) ExpireIdempotencyKeys(ctx context.Context, before time.Time) (int64, error) {
 	res, err := s.DB.NewRaw(`
-		DELETE FROM idempotency_keys WHERE expires_at < now()
-	`).Exec(ctx)
+		DELETE FROM idempotency_keys WHERE expires_at < ?
+	`, before).Exec(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -127,25 +199,19 @@ func (s *Store) IdempotencyPruneExpired(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// ValidIdempotencyKey reports whether a header value is acceptable as
-// an idempotency key. Reject empty, oversized, and control-char inputs
-// so attackers can't poison the table by sending pathological strings.
-func ValidIdempotencyKey(s string) bool {
-	if len(s) < 1 || len(s) > 256 {
-		return false
-	}
-	if strings.ContainsAny(s, "\x00\n\r") {
-		return false
-	}
-	return true
+// IdempotencyPruneExpired is ExpireIdempotencyKeys(now()). Kept as the
+// name the background janitor already calls.
+func (s *Store) IdempotencyPruneExpired(ctx context.Context) (int64, error) {
+	return s.ExpireIdempotencyKeys(ctx, time.Now())
 }
 
-// SecondsUntil returns seconds from now to t, capped non-negative.
-// Used by the middleware to surface Retry-After hints.
-func SecondsUntil(t time.Time) int {
-	d := time.Until(t)
-	if d < 0 {
-		return 0
+// ValidIdempotencyKey reports whether a header value is acceptable as an
+// idempotency key: non-empty, at most 255 chars (the column's CHECK), and
+// free of control characters so a hostile client cannot smuggle newlines
+// or NULs into the table.
+func ValidIdempotencyKey(s string) bool {
+	if len(s) < 1 || len(s) > 255 {
+		return false
 	}
-	return int(d.Seconds())
+	return !strings.ContainsAny(s, "\x00\n\r")
 }

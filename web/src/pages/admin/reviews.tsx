@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, Eye, Reply, Trash2, X } from "lucide-react"
+import { Check, Eye, Reply, Star, Trash2, X } from "lucide-react"
 import { useState } from "react"
+import { ListEmptyState } from "@/components/empty-state"
 import { StarRating } from "@/components/star-rating"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,7 +20,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -109,10 +109,13 @@ export default function AdminReviewsPage() {
       showToast(vars.action === "approve" ? t("toast.reviewApproved") : t("toast.reviewRejected"), "success")
     },
     onError: (e: Error) => {
+      // A move the state machine refuses is a race (someone else
+      // moderated first), not a mystery: say so, and keep the request
+      // id on every refusal for the support reference.
       if (e instanceof ApiError && e.code === "REVIEW_TRANSITION_INVALID") {
-        showToast(t("reviews.errTransition"), "error")
+        toastError(e, t("reviews.errTransition"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -127,7 +130,7 @@ export default function AdminReviewsPage() {
       showToast(t("toast.reviewReplied"), "success")
       setReplying(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const deleteMut = useMutation({
@@ -138,7 +141,7 @@ export default function AdminReviewsPage() {
       setDeleting(null)
       setDetail(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -174,6 +177,22 @@ export default function AdminReviewsPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : reviews.length === 0 ? (
+            // The queue fills from customer reviews, so an empty view
+            // is either "none written yet" or "filtered to nothing".
+            <ListEmptyState
+              icon={Star}
+              title={t("empty.reviews.title")}
+              description={t("empty.reviews.desc")}
+              filtered={statusFilter !== "" || productFilter !== ""}
+              filteredTitle={t("filter.noMatches")}
+              filteredDescription={t("empty.filteredDesc")}
+              clearLabel={t("common.clearFilters")}
+              onClearFilters={() => {
+                setStatusFilter("")
+                setProductInput("")
+              }}
+            />
           ) : (
             <>
               <DataTable>
@@ -189,7 +208,6 @@ export default function AdminReviewsPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {reviews.length === 0 && <DataTableEmpty colSpan={7} message={t("reviews.empty")} />}
                   {reviews.map((r: Review) => (
                     <DataTableRow key={r.id}>
                       <DataTableCell>

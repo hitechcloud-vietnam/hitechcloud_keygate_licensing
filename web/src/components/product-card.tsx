@@ -1,10 +1,11 @@
 import { Package } from "lucide-react"
-import { Link } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { StarRating } from "@/components/star-rating"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { useI18n } from "@/i18n"
 import type { MarketplaceProduct } from "@/lib/api"
+import { attributionFromSearch, withAttribution } from "@/lib/attribution"
 import { formatMinor } from "@/lib/money"
 
 // ProductCard — one catalog entry: identity (logo/name/handle), the
@@ -19,10 +20,17 @@ import { formatMinor } from "@/lib/money"
 // rather than drawing an empty five-star row on every unreviewed card.
 export function ProductCard({ product }: { product: MarketplaceProduct }) {
   const { t } = useI18n()
+  const { search } = useLocation()
   const priced = product.plans.filter((p) => p.price != null && p.currency)
   const from = priced.length ? priced.reduce((a, b) => ((a.price ?? 0) <= (b.price ?? 0) ? a : b)) : null
   return (
-    <Link to={`/marketplace/products/${product.slug}`} className="group block">
+    // Attribution rides the product link too, so a visitor who arrived
+    // at the listing with ?reseller_code= / ?ref= still carries it when
+    // they reach the checkout behind the Buy button.
+    <Link
+      to={withAttribution(`/marketplace/products/${product.slug}`, attributionFromSearch(search))}
+      className="group block"
+    >
       <Card className="h-full transition-shadow group-hover:shadow-md">
         <CardContent className="space-y-3 p-5">
           <div className="flex items-start gap-3">

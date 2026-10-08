@@ -3,7 +3,7 @@ import { ArrowLeft, Ban, RotateCcw, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +31,7 @@ import { Separator } from "@/components/ui/separator"
 import { type TranslationKeys, useI18n } from "@/i18n"
 import type { Order, OrderBillingPatch, OrderInvoice } from "@/lib/api"
 import { ApiError, admin } from "@/lib/api"
+import { errorMessage } from "@/lib/errors"
 import { formatBps, formatMinor } from "@/lib/money"
 import { formatDate } from "@/lib/utils"
 import { statusBadgeColor } from "@/pages/admin/orders"
@@ -64,20 +65,20 @@ export default function OrderDetailPage() {
       showToast(t("toast.orderRefunded"), "success")
       setRefunding(false)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   // The two invoice moves answer 409 with codes that say exactly what
   // is wrong — a paid invoice is not voidable (refund the order first)
   // and any other illegal move is refused by the state machine. Both
-  // are surfaced with text that tells the admin what to do next.
+  // are surfaced with curated text plus a request-id reference.
   const invoiceError = (e: Error, notVoidable: boolean) => {
     if (e instanceof ApiError && e.code === "INVOICE_NOT_VOIDABLE" && notVoidable) {
-      showToast(t("orders.errInvoiceNotVoidable"), "error")
+      toastError(e, t("orders.errInvoiceNotVoidable"))
     } else if (e instanceof ApiError && e.code === "INVOICE_TRANSITION_INVALID") {
-      showToast(t("orders.errInvoiceTransition"), "error")
+      toastError(e, t("orders.errInvoiceTransition"))
     } else {
-      showToast(e.message, "error")
+      toastError(e)
     }
   }
 
@@ -122,7 +123,7 @@ export default function OrderDetailPage() {
         </Link>
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            {error ? (error instanceof Error ? error.message : String(error)) : t("orders.notFound")}
+            {error ? (error instanceof Error ? errorMessage(error) : String(error)) : t("orders.notFound")}
           </CardContent>
         </Card>
       </div>
@@ -448,7 +449,7 @@ function BillingCard({ order }: { order: Order }) {
       qc.invalidateQueries({ queryKey: ["admin", "orders"] })
       showToast(t("toast.billingSaved"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {

@@ -3,7 +3,7 @@ import { Check, Copy, Download, KeyRound, Plus, RotateCw, Trash2 } from "lucide-
 import { Fragment, type ReactNode, useState } from "react"
 import { Link } from "react-router-dom"
 import { ProductSelect } from "@/components/product-select"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -151,7 +151,7 @@ function useProductUpdate(product: Product, success: string) {
       qc.invalidateQueries({ queryKey: ["admin", "products"] })
       showToast(success, "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 }
 
@@ -657,7 +657,7 @@ function SigningKeysSection({ productId }: { productId: string }) {
       qc.invalidateQueries({ queryKey: ["admin", "signing-keys", productId] })
       showToast(t("updateSettings.toastKeyGenerated"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   if (isLoading) return <div className="h-32 animate-pulse bg-muted rounded-md" />
@@ -825,7 +825,7 @@ function RotateKeyDialog({ productId, onClose }: { productId: string; onClose: (
       showToast(t("updateSettings.toastKeyRotated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -871,7 +871,7 @@ function DeactivateKeyDialog({ productId, onClose }: { productId: string; onClos
       showToast(t("updateSettings.toastKeyDeactivated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (

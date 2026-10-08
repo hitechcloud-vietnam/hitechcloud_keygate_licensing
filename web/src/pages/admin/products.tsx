@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Cloud, Laptop, Layers, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { CopyableId } from "@/components/copyable-id"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -63,7 +63,7 @@ export default function ProductsPage() {
       setCreating(false)
       showToast(t("toast.productCreated"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, ...data }: Partial<Product> & { id: string }) => admin.updateProduct(id, data),
@@ -71,7 +71,7 @@ export default function ProductsPage() {
       qc.invalidateQueries({ queryKey: ["admin", "products"] })
       setEditing(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const deleteMut = useMutation({
     mutationFn: (id: string) => admin.deleteProduct(id),
@@ -80,7 +80,7 @@ export default function ProductsPage() {
       setDeleting(null)
       showToast(t("toast.productDeleted"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const { items: products, total, totalPages } = pg.from(data, data?.products)

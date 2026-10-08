@@ -6,6 +6,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/crypto"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 )
 
@@ -13,13 +14,28 @@ func (s *Store) CreateWebhook(ctx context.Context, w *model.Webhook) error {
 	if w.ID == "" {
 		w.ID = newID()
 	}
+	// Persist the signing secret SEALED at rest; restore the plaintext on
+	// the struct so the create handler can show it once. Read paths open it.
+	origSecret := w.Secret
+	w.Secret = crypto.Seal(origSecret)
 	_, err := s.DB.NewInsert().Model(w).Exec(ctx)
+	w.Secret = origSecret
 	return err
 }
 
 func (s *Store) FindWebhookByID(ctx context.Context, id string) (*model.Webhook, error) {
 	w := new(model.Webhook)
-	return w, s.DB.NewSelect().Model(w).Relation("Product").Where("webhook.id = ?", id).Scan(ctx)
+	if err := s.DB.NewSelect().Model(w).Relation("Product").Where("webhook.id = ?", id).Scan(ctx); err != nil {
+		return nil, err
+	}
+	// Open the secret here so the caller (signer / update handler) holds
+	// the plaintext. Legacy plaintext values pass through unchanged.
+	secret, err := crypto.Open(w.Secret)
+	if err != nil {
+		return nil, err
+	}
+	w.Secret = secret
+	return w, nil
 }
 
 func (s *Store) ListWebhooks(ctx context.Context, productID, search string, p Page) ([]*model.Webhook, int, error) {
@@ -35,6 +51,13 @@ func (s *Store) ListWebhooks(ctx context.Context, productID, search string, p Pa
 	if err != nil {
 		return nil, 0, err
 	}
+	// Best-effort open: the listing never serialises the secret
+	// (json:"-"), so a value we can't decrypt is left as-is.
+	for _, w := range out {
+		if secret, err := crypto.Open(w.Secret); err == nil {
+			w.Secret = secret
+		}
+	}
 	if p.Limit <= 0 {
 		total = len(out)
 	}
@@ -43,7 +66,13 @@ func (s *Store) ListWebhooks(ctx context.Context, productID, search string, p Pa
 
 func (s *Store) UpdateWebhook(ctx context.Context, w *model.Webhook) error {
 	w.UpdatedAt = time.Now()
+	// UpdateWebhook writes ALL columns (including secret), so seal the
+	// secret to avoid overwriting the stored value with plaintext;
+	// restore it after so the handler still holds the plaintext.
+	origSecret := w.Secret
+	w.Secret = crypto.Seal(origSecret)
 	_, err := s.DB.NewUpdate().Model(w).WherePK().Exec(ctx)
+	w.Secret = origSecret
 	return err
 }
 
@@ -54,10 +83,20 @@ func (s *Store) DeleteWebhook(ctx context.Context, id string) error {
 
 func (s *Store) FindWebhooksForEvent(ctx context.Context, productID, event string) ([]*model.Webhook, error) {
 	var out []*model.Webhook
-	err := s.DB.NewSelect().Model(&out).
+	if err := s.DB.NewSelect().Model(&out).
 		Where("product_id = ? AND active = true AND ? = ANY(events)", productID, event).
-		Scan(ctx)
-	return out, err
+		Scan(ctx); err != nil {
+		return nil, err
+	}
+	// Open each secret so the dispatch signer can compute HMACs.
+	for _, w := range out {
+		secret, err := crypto.Open(w.Secret)
+		if err != nil {
+			return nil, err
+		}
+		w.Secret = secret
+	}
+	return out, nil
 }
 
 func (s *Store) CreateWebhookDelivery(ctx context.Context, d *model.WebhookDelivery) error {

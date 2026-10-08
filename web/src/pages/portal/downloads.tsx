@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { Download } from "lucide-react"
+import { ListEmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -7,7 +8,6 @@ import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTableRow,
@@ -37,6 +37,16 @@ export default function PortalDownloadsPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : downloads.length === 0 ? (
+            // No filters on this page, so an empty list is a genuinely
+            // empty shelf: say what will appear here and where to get
+            // the first one.
+            <ListEmptyState
+              icon={Download}
+              title={t("portal.downloadsEmpty")}
+              description={t("empty.downloads.desc")}
+              action={{ label: t("empty.browseMarketplace"), to: "/marketplace" }}
+            />
           ) : (
             <DataTable>
               <DataTableHeader>
@@ -51,7 +61,6 @@ export default function PortalDownloadsPage() {
                 </DataTableRow>
               </DataTableHeader>
               <DataTableBody>
-                {downloads.length === 0 && <DataTableEmpty colSpan={7} message={t("portal.downloadsEmpty")} />}
                 {downloads.map((d: PortalDownload) => (
                   <DataTableRow key={`${d.license_id}-${d.product_id}-${d.version}-${d.platform}-${d.filename}`}>
                     <DataTableCell className="font-medium">{d.product_name}</DataTableCell>

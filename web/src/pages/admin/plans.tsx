@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
 import { ProductSelect } from "@/components/product-select"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -76,7 +76,7 @@ export default function PlansPage() {
       setCreating(false)
       showToast(t("toast.planCreated"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, ...data }: Partial<Plan> & { id: string }) => admin.updatePlan(id, data),
@@ -84,7 +84,7 @@ export default function PlansPage() {
       qc.invalidateQueries({ queryKey: ["admin", "plans"] })
       setEditing(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
   const deleteMut = useMutation({
     mutationFn: (id: string) => admin.deletePlan(id),
@@ -93,7 +93,7 @@ export default function PlansPage() {
       setDeleting(null)
       showToast(t("toast.planDeleted"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   if (!isLoading && products.length === 0) {
@@ -707,7 +707,7 @@ function EntitlementSection({ planId, entitlements: initial }: { planId: string;
         stripe_meter_event_name: "",
       })
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const deleteMut = useMutation({
@@ -716,7 +716,7 @@ function EntitlementSection({ planId, entitlements: initial }: { planId: string;
       qc.invalidateQueries({ queryKey: ["admin", "plans"] })
       setConfirmDelete(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (

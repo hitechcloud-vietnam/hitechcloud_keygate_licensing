@@ -3,7 +3,7 @@ import { ArrowLeft, Banknote, Check, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +42,7 @@ import { PICKER_PAGE, SearchableSelect } from "@/components/ui/searchable-select
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { type TranslationKeys, useI18n } from "@/i18n"
 import { admin, type Commission, type License, type Reseller, type ResellerPriceOverride } from "@/lib/api"
+import { errorMessage } from "@/lib/errors"
 import {
   bpsToPercentString,
   formatBps,
@@ -86,7 +87,7 @@ export default function ResellerDetailPage() {
         </Link>
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            {error ? (error instanceof Error ? error.message : String(error)) : t("resellers.notFound")}
+            {error ? (error instanceof Error ? errorMessage(error) : String(error)) : t("resellers.notFound")}
           </CardContent>
         </Card>
       </div>
@@ -150,7 +151,7 @@ function ProfileForm({ reseller }: { reseller: Reseller }) {
       qc.invalidateQueries({ queryKey: ["admin", "resellers"] })
       showToast(t("toast.resellerSaved"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {
@@ -259,7 +260,7 @@ function LicensesCard({ resellerId }: { resellerId: string }) {
       showToast(t("toast.licenseDeallocated"), "success")
       setDeallocating(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -361,7 +362,7 @@ function AllocateDialog({ resellerId, onClose }: { resellerId: string; onClose: 
       showToast(t("toast.licenseAllocated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -439,7 +440,7 @@ function CommissionsCard({ resellerId, contractBps }: { resellerId: string; cont
       showToast(t("toast.commissionPaid"), "success")
       setPaying(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -574,7 +575,7 @@ function AccrueDialog({
       showToast(t("toast.commissionAccrued"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {
@@ -670,7 +671,7 @@ function PricesCard({ resellerId }: { resellerId: string }) {
       showToast(t("toast.priceDeleted"), "success")
       setDeleting(null)
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   return (
@@ -784,7 +785,7 @@ function PriceDialog({
       showToast(t("toast.priceSaved"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {

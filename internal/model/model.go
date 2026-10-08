@@ -983,24 +983,10 @@ func IsValidReleaseChannel(c string) bool {
 	return false
 }
 
-// IdempotencyKey caches the response of an idempotent POST so a retry
-// with the same `Idempotency-Key` header returns the original outcome.
-// (key, endpoint) is composite primary key.
-type IdempotencyKey struct {
-	bun.BaseModel `bun:"table:idempotency_keys"`
-
-	Key      string `bun:",pk" json:"key"`
-	Endpoint string `bun:",pk" json:"endpoint"`
-
-	BodyHash string `bun:",notnull" json:"body_hash"`
-
-	ResponseStatus   int    `bun:",notnull,default:0" json:"response_status"`
-	ResponseBody     string `bun:",notnull,default:''" json:"response_body"`
-	ResponseComplete bool   `bun:",notnull,default:false" json:"response_complete"`
-
-	CreatedAt time.Time `bun:",nullzero,default:now()" json:"created_at"`
-	ExpiresAt time.Time `bun:",nullzero" json:"expires_at"`
-}
+// Idempotent-by-key response caching lives in internal/store
+// (IdempotencyRecord, scoped by caller identity — see
+// internal/store/idempotency.go and migration 20261008_144000). The
+// old (key, endpoint) model that lived here was superseded.
 
 // API key scopes — reserved for future server-to-server integrations
 // (e.g. license:read, license:write). No scope is currently enforced

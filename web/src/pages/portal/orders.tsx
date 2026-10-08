@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, Receipt } from "lucide-react"
+import { ChevronDown, ChevronRight, Receipt, ShoppingCart } from "lucide-react"
 import { useState } from "react"
+import { ListEmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import {
   DataTable,
   DataTableBody,
   DataTableCell,
-  DataTableEmpty,
   DataTableHead,
   DataTableHeader,
   DataTablePagination,
@@ -65,6 +65,20 @@ export default function PortalOrdersPage() {
         <CardContent className="pt-6">
           {isLoading ? (
             <div className="h-32 animate-pulse bg-muted rounded-lg" />
+          ) : orders.length === 0 ? (
+            // A status chip can narrow the ledger to nothing — that is
+            // a filter story (clear it), not an empty-accounts story.
+            <ListEmptyState
+              icon={ShoppingCart}
+              title={t("portal.ordersEmpty")}
+              description={t("empty.orders.customerDesc")}
+              action={{ label: t("empty.browseMarketplace"), to: "/marketplace" }}
+              filtered={statusFilter !== ""}
+              filteredTitle={t("filter.noMatches")}
+              filteredDescription={t("empty.filteredDesc")}
+              clearLabel={t("common.clearFilters")}
+              onClearFilters={() => setStatusFilter("")}
+            />
           ) : (
             <>
               <DataTable>
@@ -78,7 +92,6 @@ export default function PortalOrdersPage() {
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
-                  {orders.length === 0 && <DataTableEmpty colSpan={5} message={t("portal.ordersEmpty")} />}
                   {orders.map((o: Order) => (
                     <OrderRows
                       key={o.id}

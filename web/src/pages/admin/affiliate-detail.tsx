@@ -3,7 +3,7 @@ import { ArrowLeft, Check, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-rea
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
-import { showToast } from "@/components/toast"
+import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,6 +48,7 @@ import {
   admin,
   type ReferralCode,
 } from "@/lib/api"
+import { errorMessage } from "@/lib/errors"
 import { bpsToPercentString, formatMinorUnits, parseIntStrict, percentStringToBps } from "@/lib/money"
 import { boolColor, formatDate, statusColor } from "@/lib/utils"
 import { ledgerBadgeColor } from "@/pages/admin/resellers"
@@ -86,7 +87,7 @@ export default function AffiliateDetailPage() {
         </Link>
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            {error ? (error instanceof Error ? error.message : String(error)) : t("affiliateDetail.notFound")}
+            {error ? (error instanceof Error ? errorMessage(error) : String(error)) : t("affiliateDetail.notFound")}
           </CardContent>
         </Card>
       </div>
@@ -161,7 +162,7 @@ function ProfileForm({ affiliate }: { affiliate: Affiliate }) {
       qc.invalidateQueries({ queryKey: ["admin", "affiliates"] })
       showToast(t("toast.affiliateSaved"), "success")
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {
@@ -313,9 +314,9 @@ function CodesCard({ affiliateId }: { affiliateId: string }) {
     },
     onError: (e: Error) => {
       if (e instanceof ApiError && e.code === "REFERRAL_CODE_HAS_CONVERSIONS") {
-        showToast(t("affiliateDetail.codeDeleteBlocked"), "error")
+        toastError(e, t("affiliateDetail.codeDeleteBlocked"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -438,7 +439,7 @@ function CodeDialog({ affiliateId, code, onClose }: { affiliateId: string; code?
       showToast(code ? t("toast.codeSaved") : t("toast.codeCreated"), "success")
       onClose()
     },
-    onError: (e: Error) => showToast(e.message, "error"),
+    onError: (e: Error) => toastError(e),
   })
 
   const submit = () => {
@@ -563,11 +564,11 @@ function ConversionsCard({ affiliateId }: { affiliateId: string }) {
     },
     onError: (e: Error) => {
       if (e instanceof ApiError && e.code === "CONVERSION_TRANSITION_INVALID") {
-        showToast(t("affiliateDetail.errConversionTransition"), "error")
+        toastError(e, t("affiliateDetail.errConversionTransition"))
       } else if (e instanceof ApiError && e.code === "CONVERSION_IN_PAYOUT") {
-        showToast(t("affiliateDetail.errConversionInPayout"), "error")
+        toastError(e, t("affiliateDetail.errConversionInPayout"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -741,9 +742,9 @@ function PayoutsCard({ affiliateId }: { affiliateId: string }) {
     },
     onError: (e: Error) => {
       if (e instanceof ApiError && e.code === "PAYOUT_TRANSITION_INVALID") {
-        showToast(t("affiliateDetail.errPayoutTransition"), "error")
+        toastError(e, t("affiliateDetail.errPayoutTransition"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -865,9 +866,9 @@ function PayoutDialog({ affiliateId, onClose }: { affiliateId: string; onClose: 
     },
     onError: (e: Error) => {
       if (e instanceof ApiError && e.code === "PAYOUT_NOTHING_TO_PAY") {
-        showToast(t("affiliateDetail.errPayoutNothing"), "error")
+        toastError(e, t("affiliateDetail.errPayoutNothing"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })
@@ -953,9 +954,9 @@ function PayoutFailDialog({
     },
     onError: (e: Error) => {
       if (e instanceof ApiError && e.code === "PAYOUT_TRANSITION_INVALID") {
-        showToast(t("affiliateDetail.errPayoutTransition"), "error")
+        toastError(e, t("affiliateDetail.errPayoutTransition"))
       } else {
-        showToast(e.message, "error")
+        toastError(e)
       }
     },
   })

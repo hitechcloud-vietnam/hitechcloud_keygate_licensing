@@ -789,7 +789,17 @@ func main() {
 		// trust-model alignment: a license_key sitting on the user's
 		// laptop shouldn't be able to silently change the org's
 		// member roster.
-		idem := middleware.Idempotency(db)
+		// Idempotency scope = the caller identity (session/API-key user,
+		// else client IP) so two callers reusing a key never collide.
+		idemScope := func(c *gin.Context) string {
+			if u, ok := c.Get("user_id"); ok {
+				if s, ok := u.(string); ok && s != "" {
+					return "user:" + s
+				}
+			}
+			return "ip:" + c.ClientIP()
+		}
+		idem := middleware.Idempotency(idemScope, db)
 		lic.POST("/activate", idem, licenseH.Activate)
 		lic.POST("/usage", idem, usageH.RecordUsage)
 		lic.POST("/floating/checkout", idem, floatingH.CheckOut)
@@ -1423,6 +1433,24 @@ func main() {
 		admin.POST("/sso/tokens", ssoAdminH.CreateToken)
 		admin.POST("/sso/tokens/:id/revoke", ssoAdminH.RevokeToken)
 		admin.DELETE("/sso/tokens/:id", ssoAdminH.DeleteToken)
+
+		// Advanced RBAC (Phase 8, plan §8): custom roles + granular
+		// permissions. Role admin is a settings-level action. Existing
+		// admin routes keep their is_admin gate (wildcard passthrough in
+		// RequirePermission); per-route permission gates are a follow-up
+		// rollout — see ExpandBuiltinRole for the mapping.
+		rbacAdminH := handler.NewRBACAdminHandler(db)
+		rbac := admin.Group("/rbac", middleware.RequirePermission(model.PermSettingsManage, db))
+		rbac.GET("/permissions", rbacAdminH.Permissions)
+		rbac.GET("/roles", rbacAdminH.ListRoles)
+		rbac.POST("/roles", rbacAdminH.CreateRole)
+		rbac.GET("/roles/:id", rbacAdminH.GetRole)
+		rbac.PATCH("/roles/:id", rbacAdminH.UpdateRole)
+		rbac.DELETE("/roles/:id", rbacAdminH.DeleteRole)
+		rbac.PUT("/roles/:id/permissions", rbacAdminH.SetPermissions)
+		rbac.GET("/users/:user_id/roles", rbacAdminH.ListUserRoles)
+		rbac.POST("/users/:user_id/roles", rbacAdminH.AssignRole)
+		rbac.DELETE("/users/:user_id/roles", rbacAdminH.RevokeRole)
 
 		// Reseller foundation (Phase 7): accounts + licence allocation.
 		resellerAdminH := handler.NewResellerAdminHandler(db)
