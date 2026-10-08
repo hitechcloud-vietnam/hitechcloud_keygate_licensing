@@ -37,6 +37,15 @@ type Config struct {
 	// (sk_live_ vs sk_test_) unless STRIPE_LIVEMODE is set explicitly.
 	StripeLivemode bool
 
+	// ─── Vietnamese payment gateways (plan §25 provider abstraction) ───
+	// One-off VND payments: Pay2S (bank transfer / Napas 247 QR),
+	// ZaloPay, payOS (VietQR). Subscriptions stay on Stripe. Each
+	// gateway is Enabled() only when ALL of its credentials are set —
+	// availability depends on actual integration capability (§25).
+	Pay2S   Pay2SConfig
+	ZaloPay ZaloPayConfig
+	PayOS   PayOSConfig
+
 	WebhookMaxAttempts   int
 	WebhookRetryInterval string
 	WebhookHTTPTimeout   string
@@ -133,6 +142,39 @@ type Config struct {
 	MaxReleaseSignSize int64
 }
 
+// Pay2SConfig holds the Pay2S partner credentials (payment.pay2s.vn —
+// bank transfer / Napas 247 QR). BaseURL defaults to the production
+// endpoint; point it at https://sandbox-payment.pay2s.vn for testing.
+type Pay2SConfig struct {
+	PartnerCode  string
+	PartnerName  string
+	AccessKey    string
+	SecretKey    string
+	BankAccounts string // "970422|92568686|MB Bank|..." repeated entries "bankId|accountNumber|accountName|bankName"; see pay2s.go
+	BaseURL      string
+}
+
+// ZaloPayConfig holds the ZaloPay OpenAPI credentials (openapi.zalopay.vn).
+// AppID is numeric (stored as string for env convenience; the impl
+// parses it). BaseURL defaults to https://openapi.zalopay.vn, sandbox
+// https://sb-openapi.zalopay.vn.
+type ZaloPayConfig struct {
+	AppID       string
+	Key1        string // HMAC-SHA256 mac key for outbound requests
+	CallbackKey string // HMAC-SHA256 key for inbound callbacks
+	BaseURL     string
+}
+
+// PayOSConfig holds the payOS merchant API credentials
+// (api-merchant.payos.vn / my.payos.vn). BaseURL defaults to
+// https://api-merchant.payos.vn.
+type PayOSConfig struct {
+	ClientID    string // x-client-id
+	APIKey      string // x-api-key
+	ChecksumKey string // HMAC-SHA256 checksum key (signatures)
+	BaseURL     string
+}
+
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
@@ -153,6 +195,27 @@ func Load() (*Config, error) {
 
 	envVal, envSet := os.LookupEnv("STRIPE_LIVEMODE")
 	cfg.StripeLivemode = deriveLivemode(envVal, envSet, cfg.StripeSecretKey)
+
+	cfg.Pay2S = Pay2SConfig{
+		PartnerCode:  os.Getenv("PAY2S_PARTNER_CODE"),
+		PartnerName:  envOr("PAY2S_PARTNER_NAME", "HiTechCloud"),
+		AccessKey:    os.Getenv("PAY2S_ACCESS_KEY"),
+		SecretKey:    os.Getenv("PAY2S_SECRET_KEY"),
+		BankAccounts: os.Getenv("PAY2S_BANK_ACCOUNTS"),
+		BaseURL:      envOr("PAY2S_BASE_URL", "https://payment.pay2s.vn"),
+	}
+	cfg.ZaloPay = ZaloPayConfig{
+		AppID:       os.Getenv("ZALOPAY_APP_ID"),
+		Key1:        os.Getenv("ZALOPAY_KEY1"),
+		CallbackKey: os.Getenv("ZALOPAY_CALLBACK_KEY"),
+		BaseURL:     envOr("ZALOPAY_BASE_URL", "https://openapi.zalopay.vn"),
+	}
+	cfg.PayOS = PayOSConfig{
+		ClientID:    os.Getenv("PAYOS_CLIENT_ID"),
+		APIKey:      os.Getenv("PAYOS_API_KEY"),
+		ChecksumKey: os.Getenv("PAYOS_CHECKSUM_KEY"),
+		BaseURL:     envOr("PAYOS_BASE_URL", "https://api-merchant.payos.vn"),
+	}
 
 	cfg.RedisURL = os.Getenv("REDIS_URL")
 

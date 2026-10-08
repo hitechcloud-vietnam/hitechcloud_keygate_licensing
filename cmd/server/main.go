@@ -438,6 +438,15 @@ func main() {
 	}
 	// Initialize thread-safe webhook secret with config value
 	stripeH.SetWebhookSecret(cfg.StripeWebhookSecret)
+	// Vietnamese payment gateways (plan §25 provider abstraction):
+	// one-off VND payments via Pay2S (bank transfer / Napas 247 QR),
+	// ZaloPay and payOS (VietQR). Registered unconditionally —
+	// Provider.Enabled() reports whether the credentials are actually
+	// configured, so availability always reflects real integration
+	// capability. Subscriptions stay on Stripe.
+	payment.RegisterProvider(payment.NewPay2S(cfg.Pay2S))
+	payment.RegisterProvider(payment.NewZaloPay(cfg.ZaloPay))
+	payment.RegisterProvider(payment.NewPayOS(cfg.PayOS))
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	meteredSyncer := service.NewMeteredBillingSyncer(db, logger)
 	adminH := handler.NewAdminHandler(db, webhookSvc, emailSvc, expiryChecker, meteredSyncer)
@@ -937,6 +946,33 @@ func main() {
 
 	// Unified checkout: GET /pay/:checkout_id → Stripe
 	r.GET("/pay/:checkout_id", stripeH.CheckoutByPlan)
+
+	// Gateway checkout (plan §25): one-off VND payments through the
+	// Vietnamese gateways (Pay2S / ZaloPay / payOS). The two checkout
+	// routes sit in their own rate-limit buckets like checkout_quote —
+	// each call creates a payment link at a third party — and the IPN
+	// endpoints get a shared, generous bucket like stripe_webhook:
+	// gateways retry aggressively (Pay2S: 5min/15min/1h/24h) and must
+	// never be locked out by a burst.
+	pgw := handler.NewPaymentGatewayHandler(db, cfg.BaseURL, emailSvc, webhookSvc)
+	v1.GET("/checkout/gateway-pay/methods",
+		middleware.RateLimitByIPScoped("gateway_pay", cfg.RateLimitAPI, time.Minute),
+		pgw.GatewayMethods)
+	v1.POST("/checkout/gateway-pay",
+		middleware.RateLimitByIPScoped("gateway_pay", cfg.RateLimitAPI, time.Minute),
+		pgw.GatewayPay)
+	v1.GET("/checkout/gateway-pay/status",
+		middleware.RateLimitByIPScoped("gateway_pay", cfg.RateLimitAPI, time.Minute),
+		pgw.GatewayPayStatus)
+	v1.POST("/webhook/pay2s",
+		middleware.RateLimitByIPScoped("gateway_ipn", 120, time.Minute),
+		pgw.WebhookPay2S)
+	v1.POST("/webhook/zalopay",
+		middleware.RateLimitByIPScoped("gateway_ipn", 120, time.Minute),
+		pgw.WebhookZaloPay)
+	v1.POST("/webhook/payos",
+		middleware.RateLimitByIPScoped("gateway_ipn", 120, time.Minute),
+		pgw.WebhookPayOS)
 
 	// Affiliate attribution (Phase 7): /r/<code> records the click
 	// (hashed IP only) and redirects to the code's stored landing page

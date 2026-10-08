@@ -1155,6 +1155,27 @@ const vi = {
   "checkout.totals": "Tổng tiền",
   "checkout.pay": "Thanh toán ngay",
 
+  // Gateway checkout (Vietnamese one-off VND payments) — plan §25
+  "checkout.methodTitle": "Phương thức thanh toán",
+  "checkout.methodStripe": "Thẻ tín dụng",
+  "checkout.methodBank": "Chuyển khoản ngân hàng / ví điện tử",
+  "checkout.emailLabel": "Email",
+  "checkout.emailPlaceholder": "ban@vidu.vn",
+  "checkout.emailRequired": "Nhập email để nhận giấy phép.",
+  "checkout.gatewayError": "Không thể khởi tạo thanh toán. Vui lòng thử lại.",
+  "gatewayReturn.title": "Kết quả thanh toán",
+  "gatewayReturn.processing": "Đang chờ xác nhận thanh toán…",
+  "gatewayReturn.processingHint": "Quá trình này có thể mất ít phút. Vui lòng giữ trang này mở.",
+  "gatewayReturn.success": "Thanh toán thành công",
+  "gatewayReturn.successBody": "Giấy phép đã được gửi tới email của bạn. Đơn hàng {order}.",
+  "gatewayReturn.pending": "Thanh toán đang được xử lý",
+  "gatewayReturn.pendingBody": "Chúng tôi sẽ gửi giấy phép qua email ngay khi thanh toán hoàn tất. Đơn hàng {order}.",
+  "gatewayReturn.failed": "Thanh toán chưa hoàn tất",
+  "gatewayReturn.failedBody": "Giao dịch đã bị hủy, hết hạn hoặc thất bại. Đơn hàng {order}.",
+  "gatewayReturn.orderLabel": "Đơn hàng",
+  "gatewayReturn.backHome": "Về trang chủ",
+  "gatewayReturn.notFound": "Không tìm thấy thanh toán cho đơn hàng này.",
+
   // Marketplace (public catalog) — Phase 6
   "nav.marketplace": "Marketplace",
   "nav.categories": "Danh mục",

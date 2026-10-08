@@ -1148,6 +1148,27 @@ const en = {
   "checkout.totals": "Totals",
   "checkout.pay": "Pay now",
 
+  // Gateway checkout (Vietnamese one-off VND payments) — plan §25
+  "checkout.methodTitle": "Payment method",
+  "checkout.methodStripe": "Credit card",
+  "checkout.methodBank": "Bank transfer / e-wallet",
+  "checkout.emailLabel": "Email",
+  "checkout.emailPlaceholder": "you@example.com",
+  "checkout.emailRequired": "Enter your email to receive the licence.",
+  "checkout.gatewayError": "Could not start the payment. Please try again.",
+  "gatewayReturn.title": "Payment result",
+  "gatewayReturn.processing": "Waiting for the payment confirmation…",
+  "gatewayReturn.processingHint": "This can take a moment. Keep this page open.",
+  "gatewayReturn.success": "Payment successful",
+  "gatewayReturn.successBody": "Your licence has been sent to your email. Order {order}.",
+  "gatewayReturn.pending": "Payment is still being processed",
+  "gatewayReturn.pendingBody": "We'll email the licence as soon as the payment settles. Order {order}.",
+  "gatewayReturn.failed": "Payment not completed",
+  "gatewayReturn.failedBody": "The payment was cancelled, expired or failed. Order {order}.",
+  "gatewayReturn.orderLabel": "Order",
+  "gatewayReturn.backHome": "Back to home",
+  "gatewayReturn.notFound": "No payment found for this order.",
+
   // Marketplace (public catalog) — Phase 6
   "nav.marketplace": "Marketplace",
   "nav.categories": "Categories",

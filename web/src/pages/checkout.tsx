@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { AlertCircle, CreditCard, Tag } from "lucide-react"
+import { AlertCircle, CreditCard, Landmark, Loader2, Tag } from "lucide-react"
 import { useState } from "react"
 import { useLocation, useParams } from "react-router-dom"
 import { LanguageSwitcher } from "@/components/language-switcher"
@@ -12,17 +12,19 @@ import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/hooks/use-auth"
 import { useSiteConfig } from "@/hooks/use-site-config"
 import { type TranslationKeys, useI18n } from "@/i18n"
-import type { CheckoutQuoteRequest, CheckoutQuoteResult } from "@/lib/api"
+import type { CheckoutQuoteRequest, CheckoutQuoteResult, GatewayMethod } from "@/lib/api"
 import { ApiError, checkout } from "@/lib/api"
 import { attributionFromSearch, attributionQuery } from "@/lib/attribution"
 import { COUNTRY_CODES, countryDisplayName } from "@/lib/countries"
 import { formatBps, formatMinor } from "@/lib/money"
 
 // A checkout prices its one item — named by the checkout_id in the URL —
-// with a coupon and the buyer's country tax, then hands off to the
-// server /pay/:checkout_id route (a 302 to Stripe). Nothing here is
-// written until the buyer is on that payment page: the quote is a
-// preview, and every amount is integer minor units.
+// with a coupon and the buyer's country tax, then hands off to
+// payment: either the server /pay/:checkout_id route (a 302 to Stripe)
+// or, for VND orders, a one-off payment through a Vietnamese gateway
+// (Pay2S / ZaloPay / payOS — plan §25) where the gateway's IPN settles
+// the order server-side. Nothing is written until the buyer pays: the
+// quote is a preview, and every amount is integer minor units.
 export default function CheckoutPage() {
   const { t, locale } = useI18n()
   const { site_name, logo_url, attribution_text, attribution_url } = useSiteConfig()
@@ -41,6 +43,14 @@ export default function CheckoutPage() {
   const [couponInput, setCouponInput] = useState(initialParams.get("coupon_code") || "")
   const [committedCoupon, setCommittedCoupon] = useState(initialParams.get("coupon_code") || "")
   const [couponError, setCouponError] = useState("")
+  // Payment method: "stripe" (card) or a gateway id. A gateway checkout
+  // delivers the licence by email, so the email is collected here too —
+  // the server refuses a gateway payment without one (MISSING_CUSTOMER).
+  const [method, setMethod] = useState("stripe")
+  const [email, setEmail] = useState(initialParams.get("email") || user?.email || "")
+  const [emailError, setEmailError] = useState("")
+  const [payError, setPayError] = useState("")
+  const [paying, setPaying] = useState(false)
 
   const quote = useQuery({
     queryKey: ["checkout-quote", checkoutId, country, committedCoupon],
@@ -68,14 +78,60 @@ export default function CheckoutPage() {
     },
   })
 
+  // Which gateways this install can actually charge through (plan §25:
+  // availability = credentials configured). Empty list → card only.
+  const gatewayMethods = useQuery({
+    queryKey: ["gateway-methods"],
+    queryFn: () => checkout.gatewayMethods(),
+    staleTime: 60_000,
+    retry: false,
+  })
+  // Gateways settle VND whole-dong amounts only — the picker appears
+  // only for VND quotes.
+  const gateways: GatewayMethod[] = quote.data?.currency === "VND" ? (gatewayMethods.data?.methods ?? []) : []
+
   const applyCoupon = () => {
     setCommittedCoupon(couponInput.trim())
   }
 
-  const pay = () => {
+  const pay = async () => {
+    setPayError("")
+    if (method !== "stripe") {
+      // One-off VND gateway payment: the server prices and creates the
+      // order, the gateway collects, its IPN fulfils. We only hold the
+      // redirect. The buyer's email is mandatory — the licence must be
+      // deliverable.
+      const planId = quote.data?.lines?.[0]?.plan_id
+      if (!email.trim()) {
+        setEmailError(t("checkout.emailRequired"))
+        return
+      }
+      if (!planId) {
+        setPayError(t("checkout.gatewayError"))
+        return
+      }
+      setPaying(true)
+      try {
+        const res = await checkout.gatewayPay({
+          plan_id: planId,
+          provider: method,
+          coupon_code: committedCoupon || undefined,
+          country: country || undefined,
+          email: email.trim(),
+        })
+        window.location.assign(res.pay_url)
+        return
+      } catch (e) {
+        setPayError(e instanceof Error ? e.message : t("checkout.gatewayError"))
+      } finally {
+        setPaying(false)
+      }
+      return
+    }
     const qs = new URLSearchParams()
     if (committedCoupon) qs.set("coupon_code", committedCoupon)
     if (country) qs.set("country", country)
+    if (email.trim()) qs.set("email", email.trim())
     // Attribution the visitor arrived with — ?reseller_code= / ?ref= on
     // this URL, or the htc_ref cookie — plus the buyer's email when
     // signed in, must reach the /pay request: that is where the order
@@ -141,6 +197,21 @@ export default function CheckoutPage() {
               onApplyCoupon={applyCoupon}
               couponError={couponError}
               onPay={pay}
+              gateways={gateways}
+              method={method}
+              onMethod={(m) => {
+                setMethod(m)
+                setEmailError("")
+                setPayError("")
+              }}
+              email={email}
+              onEmail={(v) => {
+                setEmail(v)
+                setEmailError("")
+              }}
+              emailError={emailError}
+              payError={payError}
+              paying={paying}
             />
           )}
         </div>
@@ -171,6 +242,14 @@ function CheckoutBody({
   onApplyCoupon,
   couponError,
   onPay,
+  gateways,
+  method,
+  onMethod,
+  email,
+  onEmail,
+  emailError,
+  payError,
+  paying,
 }: {
   data: CheckoutQuoteResult
   country: string
@@ -181,10 +260,24 @@ function CheckoutBody({
   onApplyCoupon: () => void
   couponError: string
   onPay: () => void
+  gateways: GatewayMethod[]
+  method: string
+  onMethod: (v: string) => void
+  email: string
+  onEmail: (v: string) => void
+  emailError: string
+  payError: string
+  paying: boolean
 }) {
   const { t } = useI18n()
   const lines = data.lines || []
   const currency = data.currency
+  // Card + one entry per configured gateway. Gateways only settle VND —
+  // the parent already filters, this is just the render list.
+  const methodOptions = [
+    { id: "stripe", label: t("checkout.methodStripe"), icon: CreditCard },
+    ...gateways.map((g) => ({ id: g.id, label: g.name, icon: Landmark })),
+  ]
 
   return (
     <>
@@ -267,6 +360,49 @@ function CheckoutBody({
                 </SelectContent>
               </Select>
             </div>
+
+            {methodOptions.length > 1 && (
+              <div className="space-y-2">
+                <Label>{t("checkout.methodTitle")}</Label>
+                <div role="radiogroup" aria-label={t("checkout.methodTitle")} className="space-y-2">
+                  {methodOptions.map((opt) => (
+                    <label
+                      key={opt.id}
+                      className={`flex items-center gap-3 rounded-md border p-3 cursor-pointer transition-colors ${
+                        method === opt.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="payment-method"
+                        value={opt.id}
+                        checked={method === opt.id}
+                        onChange={() => onMethod(opt.id)}
+                        className="accent-primary"
+                      />
+                      <opt.icon className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {method !== "stripe" && (
+              <div className="space-y-2">
+                <Label htmlFor="email">{t("checkout.emailLabel")}</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => onEmail(e.target.value)}
+                  placeholder={t("checkout.emailPlaceholder")}
+                  autoComplete="email"
+                  required
+                />
+                {emailError && <p className="text-xs text-destructive">{emailError}</p>}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -310,8 +446,16 @@ function CheckoutBody({
               <span>{t("orders.colTotal")}</span>
               <span>{formatMinor(data.total_minor, currency)}</span>
             </div>
-            <Button className="w-full mt-3" size="lg" onClick={onPay}>
-              <CreditCard className="h-4 w-4 mr-2" /> {t("checkout.pay")}
+            {payError && <p className="text-xs text-destructive">{payError}</p>}
+            <Button className="w-full mt-3" size="lg" onClick={onPay} disabled={paying}>
+              {paying ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : method === "stripe" ? (
+                <CreditCard className="h-4 w-4 mr-2" />
+              ) : (
+                <Landmark className="h-4 w-4 mr-2" />
+              )}
+              {t("checkout.pay")}
             </Button>
           </CardContent>
         </Card>

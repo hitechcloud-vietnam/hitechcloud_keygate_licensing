@@ -37,6 +37,7 @@ import TaxRatesPage from "@/pages/admin/tax-rates"
 import WebhooksPage from "@/pages/admin/webhooks"
 import CheckoutPage from "@/pages/checkout"
 import CheckoutSuccessPage from "@/pages/checkout-success"
+import GatewayReturnPage from "@/pages/gateway-return"
 import LoginPage from "@/pages/login"
 import MarketplacePage from "@/pages/marketplace"
 import MarketplaceProductPage from "@/pages/marketplace-product"
@@ -88,6 +89,8 @@ createRoot(document.getElementById("root")!).render(
                     <Route path="/setup" element={<SetupPage />} />
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/checkout/success" element={<CheckoutSuccessPage />} />
+                    {/* Static gateway return page — must beat /checkout/:checkout_id (React Router ranks static first). */}
+                    <Route path="/checkout/gateway-return" element={<GatewayReturnPage />} />
                     <Route path="/checkout/:checkout_id" element={<CheckoutPage />} />
                     <Route path="/accept-invite" element={<AcceptInvitePage />} />
 

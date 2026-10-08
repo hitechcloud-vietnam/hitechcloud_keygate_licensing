@@ -188,6 +188,16 @@ export const checkout = {
   // payment. Unit prices are resolved server-side — there is no amount
   // field to send. The body is pinned by the checkout contract.
   quote: (body: CheckoutQuoteRequest) => post<CheckoutQuoteResult>("/checkout/quote", body),
+  // Vietnamese payment gateways (plan §25): which gateways this install
+  // can charge through right now (availability = credentials present).
+  gatewayMethods: () => get<{ methods: GatewayMethod[] }>("/checkout/gateway-pay/methods"),
+  // Start a one-off VND payment through a gateway. The server prices
+  // the order itself — no amount is sent. Returns the redirect target.
+  gatewayPay: (body: GatewayPayRequest) => post<GatewayPayResult>("/checkout/gateway-pay", body),
+  // Polled by the browser return page while the gateway's IPN settles
+  // the order server-side.
+  gatewayPayStatus: (orderNumber: string) =>
+    get<{ status: string; provider: string }>(`/checkout/gateway-pay/status?order=${encodeURIComponent(orderNumber)}`),
 }
 
 // ─── Invites (public, token-only) ───
@@ -1761,6 +1771,33 @@ export interface CheckoutQuoteResult {
   lines?: CheckoutQuoteLine[]
   applied_coupon: CheckoutAppliedCoupon | null
   tax_rates?: CheckoutQuoteTaxRate[]
+}
+
+// ─── Gateway checkout (Vietnamese one-off VND payments) ───
+// Pay2S (bank transfer / Napas 247 QR), ZaloPay, payOS (VietQR).
+// Subscriptions stay on Stripe; gateways settle VND whole-dong amounts
+// (minor units = dong — money.ts knows the VND exponent is 0).
+export interface GatewayMethod {
+  id: string
+  name: string
+}
+export interface GatewayPayRequest {
+  plan_id: string
+  provider: string
+  coupon_code?: string
+  country?: string
+  // Required by the server: the licence is delivered by email, so a
+  // gateway checkout without one is refused (MISSING_CUSTOMER).
+  email: string
+}
+export interface GatewayPayResult {
+  pay_url: string
+  provider_ref: string
+  order_number: string
+  amount_minor: number
+  currency: string
+  qr_code?: string
+  expires_at?: string
 }
 
 // ─── Categories (marketplace catalog) ───
