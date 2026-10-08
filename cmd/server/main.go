@@ -940,6 +940,33 @@ func main() {
 		middleware.RateLimitByIPScoped("affiliate_convert", 30, time.Minute),
 		affiliatePublicH.Convert)
 
+	// Enterprise SSO login (Phase 8 slice 2): SAML + OIDC handshakes
+	// that land the user in a normal portal session. The domain gate +
+	// signature verification live in the handler; identity is only
+	// trusted from a verified assertion.
+	ssoAuthH := handler.NewSSOAuthHandler(db, cfg)
+	r.GET("/auth/sso/:id/start",
+		middleware.RateLimitByIPScoped("sso_auth", cfg.RateLimitAuth, time.Minute),
+		ssoAuthH.Start)
+	r.POST("/auth/sso/saml/acs",
+		middleware.RateLimitByIPScoped("sso_auth", cfg.RateLimitAuth, time.Minute),
+		ssoAuthH.ACS)
+	r.GET("/auth/sso/oidc/callback",
+		middleware.RateLimitByIPScoped("sso_auth", cfg.RateLimitAuth, time.Minute),
+		ssoAuthH.Callback)
+
+	// SCIM 2.0 provisioning: its own wire format (application/scim+json)
+	// and its own auth (htc_scim_ bearer tokens). The middleware answers
+	// identical 401s for missing/unknown/revoked tokens.
+	scimH := handler.NewSCIMHandler(db, cfg.BaseURL)
+	scim := r.Group("/scim/v2", middleware.SCIMTokenAuth(db))
+	scim.GET("/Users", scimH.ListUsers)
+	scim.POST("/Users", scimH.CreateUser)
+	scim.GET("/Users/:id", scimH.GetUser)
+	scim.PUT("/Users/:id", scimH.ReplaceUser)
+	scim.PATCH("/Users/:id", scimH.PatchUser)
+	scim.DELETE("/Users/:id", scimH.DeleteUser)
+
 	portal := v1.Group("/portal", middleware.SessionAuth(cfg.JWTSecret, db.FindUserIsAdmin))
 	{
 		portal.GET("/me", authH.Me)

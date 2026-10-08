@@ -1,17 +1,14 @@
 import { useQuery } from "@tanstack/react-query"
-import { AlertCircle, ChevronLeft, ChevronRight, Package, Search } from "lucide-react"
+import { AlertCircle, ChevronLeft, ChevronRight, Search } from "lucide-react"
 import { useState } from "react"
-import { Link } from "react-router-dom"
-import { Badge } from "@/components/ui/badge"
+import { ProductCard } from "@/components/product-card"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { useServerPagination } from "@/components/ui/data-table"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
-import type { MarketplaceProduct } from "@/lib/api"
 import { marketplace } from "@/lib/api"
-import { formatMinor } from "@/lib/money"
 import { useDebounced } from "@/lib/use-debounced"
 
 // The public storefront's discovery listing (plan §30 + Phase 6):
@@ -20,7 +17,8 @@ import { useDebounced } from "@/lib/use-debounced"
 // the header/footer/attribution live there. The API accepts only
 // sort=name|newest and answers data.{products,total,limit,offset};
 // prices are null here (they live on Stripe), so a card shows its plan
-// count and a "from" price only when one is present.
+// count and a "from" price only when one is present. Cards render from
+// the shared ProductCard (which also shows the star aggregate).
 export default function MarketplacePage() {
   const { t } = useI18n()
   const [searchInput, setSearchInput] = useState("")
@@ -168,63 +166,5 @@ export default function MarketplacePage() {
         </div>
       )}
     </div>
-  )
-}
-
-// ProductCard — one catalog entry: identity (logo/name/handle), a
-// short blurb, category chips, and the plan summary. The "from" price
-// appears only when a plan actually carries one (rare: prices live on
-// Stripe and the marketplace payload nulls them today).
-function ProductCard({ product }: { product: MarketplaceProduct }) {
-  const { t } = useI18n()
-  const priced = product.plans.filter((p) => p.price != null && p.currency)
-  const from = priced.length ? priced.reduce((a, b) => ((a.price ?? 0) <= (b.price ?? 0) ? a : b)) : null
-  return (
-    <Link to={`/marketplace/products/${product.slug}`} className="group block">
-      <Card className="h-full transition-shadow group-hover:shadow-md">
-        <CardContent className="space-y-3 p-5">
-          <div className="flex items-start gap-3">
-            {product.logo_url ? (
-              <img src={product.logo_url} alt="" className="h-10 w-10 rounded object-contain" />
-            ) : (
-              <div className="flex h-10 w-10 items-center justify-center rounded bg-muted">
-                <Package className="h-5 w-5 text-muted-foreground" />
-              </div>
-            )}
-            <div className="min-w-0">
-              <h3 className="truncate font-semibold">{product.name}</h3>
-              <code className="text-xs text-muted-foreground">{product.slug}</code>
-            </div>
-          </div>
-
-          {product.short_description && (
-            <p className="line-clamp-2 text-sm text-muted-foreground">{product.short_description}</p>
-          )}
-
-          {product.categories.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {product.categories.map((c) => (
-                <Badge key={c.id} variant="outline">
-                  {c.name}
-                </Badge>
-              ))}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">
-              {product.plans.length === 1
-                ? t("marketplace.plansCountOne")
-                : t("marketplace.plansCount", { count: product.plans.length })}
-            </span>
-            {from?.price != null && from.currency && (
-              <span className="font-medium">
-                {t("marketplace.fromPrice", { price: formatMinor(from.price, from.currency) })}
-              </span>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
   )
 }

@@ -157,6 +157,35 @@ type Order struct {
 	// CustomerEmail.
 	BillingEmail string `bun:",nullzero" json:"billing_email,omitempty"`
 
+	// ── Checkout attribution (Phase 7, checkout slice) ──
+	//
+	// Who brought this sale: the reseller it is attributed to, the
+	// affiliate referral code it arrived through, and the affiliate
+	// account behind that code. Stamped at checkout time from the
+	// attribution the buyer arrived with (payment/attribution.go) and
+	// read back into the ledger when the payment settles — snapshots,
+	// exactly like the coupon/tax columns: never re-derived from the
+	// live partner tables, which may have moved or been deleted since.
+	//
+	// All four are nullable TEXT with deliberately NO foreign keys,
+	// same doctrine as commissions.order_id and
+	// affiliate_conversions.order_id: these are commercial records of
+	// a sale and must survive the partner account being deleted (and
+	// any order-retention purge). Empty is stored as NULL (bun
+	// nullzero) and omitted from JSON.
+	ResellerID string `bun:",nullzero" json:"reseller_id,omitempty"`
+	// ResellerEmail is the partner's contact address at sale time —
+	// the human-readable half of the attribution, kept so the order
+	// still names the partner after the account is gone.
+	ResellerEmail string `bun:",nullzero" json:"reseller_email,omitempty"`
+	// ReferralCode is the affiliate handle the buyer arrived with
+	// (?ref= or the htc_ref cookie), stored in its canonical folded
+	// form (model.NormalizeReferralCode).
+	ReferralCode string `bun:",nullzero" json:"referral_code,omitempty"`
+	// AffiliateID is the affiliate that code belonged to, when it
+	// resolved at stamping time.
+	AffiliateID string `bun:",nullzero" json:"affiliate_id,omitempty"`
+
 	Items []*OrderItem `bun:"rel:has-many,join:id=order_id" json:"items,omitempty"`
 }
 

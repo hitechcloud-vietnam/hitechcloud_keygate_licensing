@@ -206,6 +206,20 @@ export const marketplace = {
   }) => get<Paged<{ products: MarketplaceProduct[] }>>(`/marketplace/products?${listQuery(params)}`),
   // An unknown slug answers 404 exactly like a failed lookup.
   product: (slug: string) => get<{ product: MarketplaceProduct }>(`/marketplace/products/${encodeURIComponent(slug)}`),
+  // The Reviews section of a product page: one page of the product's
+  // APPROVED reviews (newest first) with the aggregate beside them —
+  // data.{reviews,total,limit,offset,rating_average_bps,rating_count}.
+  // bps, not a float: 10000 = 1 star, 50000 = 5.
+  reviews: (slug: string, params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ reviews: PublicReview[] }> & { rating_average_bps: number; rating_count: number }>(
+      `/marketplace/products/${encodeURIComponent(slug)}/reviews?${listQuery(params)}`,
+    ),
+  // The "you may also like" rail: same product cards as the listing
+  // (categories, plans and rating aggregates included).
+  related: (slug: string, params?: { limit?: number }) =>
+    get<{ products: MarketplaceProduct[]; total: number }>(
+      `/marketplace/products/${encodeURIComponent(slug)}/related?${listQuery(params)}`,
+    ),
 }
 
 // ─── Portal ───
@@ -285,6 +299,20 @@ export const portal = {
     patch<PortalWebhook>(`/portal/webhooks/${encodeURIComponent(id)}`, data),
   deletePortalWebhook: (id: string) => del<void>(`/portal/webhooks/${encodeURIComponent(id)}`),
   testPortalWebhook: (id: string) => post<{ status?: string }>(`/portal/webhooks/${encodeURIComponent(id)}/test`),
+
+  // ─── Product reviews (one per product per account) ───
+  // The signed-in customer's own review of one product. Create starts
+  // pending (moderation publishes it) and a second create answers 409
+  // DUPLICATE. PATCH edits the author's own title/body only (an
+  // omitted field keeps its stored value — no rating move); DELETE
+  // takes their own review down. There is no read endpoint: ownership
+  // is (product, session email) and a lookup that finds nothing —
+  // including somebody else's review — is a quiet 404.
+  createProductReview: (productId: string, data: { rating: number; title?: string; body: string }) =>
+    post<Review>(`/portal/products/${encodeURIComponent(productId)}/reviews`, data),
+  updateProductReview: (productId: string, data: { title?: string; body?: string }) =>
+    patch<Review>(`/portal/products/${encodeURIComponent(productId)}/reviews`, data),
+  deleteProductReview: (productId: string) => del<void>(`/portal/products/${encodeURIComponent(productId)}/reviews`),
 }
 
 // ─── Admin ───
@@ -827,6 +855,20 @@ export const admin = {
     post<OrderInvoice>(`/admin/orders/${orderId}/invoices/${encodeURIComponent(invoiceId)}/void`),
   markOrderInvoiceUncollectible: (orderId: string, invoiceId: string) =>
     post<OrderInvoice>(`/admin/orders/${orderId}/invoices/${encodeURIComponent(invoiceId)}/mark-uncollectible`),
+
+  // ─── Review moderation (marketplace) ───
+  // The state machine and nothing else moves: pending → approved |
+  // rejected, approved → rejected (unpublish), rejected → approved
+  // (republish). An illegal move answers 409
+  // REVIEW_TRANSITION_INVALID. reply with "" clears the public answer.
+  listReviews: (params?: { product_id?: string; status?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ reviews: Review[] }>>(`/admin/reviews?${listQuery(params)}`),
+  getReview: (id: string) => get<Review>(`/admin/reviews/${encodeURIComponent(id)}`),
+  approveReview: (id: string) => post<Review>(`/admin/reviews/${encodeURIComponent(id)}/approve`),
+  rejectReview: (id: string) => post<Review>(`/admin/reviews/${encodeURIComponent(id)}/reject`),
+  replyReview: (id: string, adminReply: string) =>
+    put<Review>(`/admin/reviews/${encodeURIComponent(id)}/reply`, { admin_reply: adminReply }),
+  deleteReview: (id: string) => del<void>(`/admin/reviews/${encodeURIComponent(id)}`),
 }
 
 // ─── Types ───
@@ -1795,6 +1837,42 @@ export interface AffiliatePayout {
   created_at: string
 }
 
+// ─── Product reviews (marketplace content) ───
+//
+// Ratings are whole stars 1..5 and the aggregate is integer basis
+// points (rating_average_bps / average_bps: 10000 = 1 star) — the
+// no-float discipline of money and rates.
+//
+// Review is the full moderation row (portal create/update responses
+// and every admin payload). Fields the Go JSON omits when empty
+// (customer_name, title, admin_reply) are optional here.
+export interface Review {
+  id: string
+  product_id: string
+  customer_email: string
+  customer_name?: string
+  rating: number
+  title?: string
+  body: string
+  status: "pending" | "approved" | "rejected"
+  admin_reply?: string
+  created_at: string
+  updated_at: string
+}
+
+// PublicReview is the anonymous storefront's selection
+// (reviewPublicJSON): no author email, no moderation status —
+// everything on that surface is approved by construction.
+export interface PublicReview {
+  id: string
+  customer_name?: string
+  rating: number
+  title?: string
+  body: string
+  admin_reply?: string
+  created_at: string
+}
+
 export interface MarketplaceProduct {
   id: string
   name: string
@@ -1807,6 +1885,10 @@ export interface MarketplaceProduct {
   categories: MarketplaceCategory[]
   plans: MarketplacePlan[]
   releases?: MarketplaceRelease[]
+  // Approved-reviews aggregate (zero / absent when none): stars in
+  // integer basis points and how many reviews they are drawn from.
+  rating_average_bps?: number
+  rating_count?: number
   // Enrichment (nullable / may be absent).
   description?: string | null
   short_description?: string | null

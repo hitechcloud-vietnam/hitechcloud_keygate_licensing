@@ -193,11 +193,26 @@ func (h *StripeHandler) CreateCheckoutSession(c *gin.Context) {
 //	               parameter is absent the rate rows decide — a country
 //	               whose rates are all marked inclusive prices inclusive
 //
+// Optional attribution parameters say who brought the sale (see
+// attribution.go for the full contract):
+//
+//	reseller_code  the reseller's contact_email (folded) — resellers have
+//	               no code field. Attribution only: it never changes what
+//	               is charged
+//	ref            the affiliate referral code; when absent the first-party
+//	               htc_ref cookie is read instead
+//	email          the buyer's address — the wholesale authority: a buyer
+//	               email that matches a reseller holding a wholesale price
+//	               for the plan is charged that price (the cut rides to
+//	               Stripe as a one-time fixed-amount coupon labelled
+//	               "wholesale"; a currency-mismatched or non-discounting
+//	               override is ignored and the list price is charged)
+//
 // Every amount is re-derived from Plan.StripePriceID through the same
 // calculation the quote endpoint answers with; nothing else a client
-// sends is read. The coupon and tax facts of the sale are stamped on
-// the session's metadata so the ledger records them when the payment
-// settles (see checkout_terms.go).
+// sends is read. The coupon, tax and attribution facts of the sale are
+// stamped on the session's metadata so the ledger records them when the
+// payment settles (see checkout_terms.go and attribution.go).
 func (h *StripeHandler) CheckoutByPlan(c *gin.Context) {
 	checkoutID := c.Param("checkout_id")
 	if len(checkoutID) != 8 {
@@ -288,7 +303,24 @@ func (h *StripeHandler) CheckoutByPlan(c *gin.Context) {
 	// unusable coupon is refused here — before any Stripe object for
 	// this sale exists.
 	currency := strings.ToUpper(string(sp.Currency))
-	res, err := priceCheckout(c, plan, sp.UnitAmount, currency, cpn, rates, taxInclusive)
+	// Attribution + wholesale pricing (attribution.go). The buyer
+	// email is the wholesale authority; reseller_code and ref only
+	// stamp who brought the sale. A wholesale deal prices the sale at
+	// the override — so the coupon caps and the tax compute on what is
+	// actually paid — and its cut from the list price becomes a
+	// one-time Stripe discount below. A failure to read the pricing
+	// state is refused, not silently priced at list.
+	attr, aerr := resolveCheckoutAttribution(c, h.Store, attributionFromContext(c), plan.ID, currency, sp.UnitAmount)
+	if aerr != nil {
+		slog.Error("stripe checkout: cannot resolve partner pricing", "plan_id", plan.ID, "error", aerr)
+		c.String(http.StatusInternalServerError, "checkout unavailable")
+		return
+	}
+	pricedUnit := sp.UnitAmount
+	if attr.wholesale != nil {
+		pricedUnit = attr.wholesale.overridePriceMinor
+	}
+	res, err := priceCheckout(c, plan, pricedUnit, currency, cpn, rates, taxInclusive)
 	if err != nil {
 		var ae *apperr.AppError
 		if errors.As(err, &ae) && ae.Code == "COUPON_INVALID" {
@@ -335,6 +367,31 @@ func (h *StripeHandler) CheckoutByPlan(c *gin.Context) {
 		params.Discounts = []*stripe.CheckoutSessionDiscountParams{{Coupon: stripe.String(sc.ID)}}
 	}
 
+	// The wholesale cut rides the same mechanism: a one-time
+	// fixed-amount Stripe coupon for exactly catalog − override, so
+	// the session's amount_discount IS the cut the receipt shows. It
+	// is a separate coupon from the buyer's own (a partner deal and a
+	// promotion are different things and both may apply — the buyer's
+	// coupon was priced against the wholesale amount, so together they
+	// can never reach past the list price), and it is appended after
+	// the buyer's so an ordinary coupon keeps discounts[0].
+	if attr.wholesale != nil && attr.wholesale.cutMinor > 0 {
+		sc, err := stripecoupon.New(&stripe.CouponParams{
+			AmountOff:      stripe.Int64(attr.wholesale.cutMinor),
+			Currency:       stripe.String(strings.ToLower(currency)),
+			Duration:       stripe.String(string(stripe.CouponDurationOnce)),
+			MaxRedemptions: stripe.Int64(1),
+			Name:           stripe.String(wholesaleCouponName),
+		})
+		if err != nil {
+			slog.Error("stripe checkout: failed to create the wholesale discount coupon",
+				"reseller_id", attr.wholesale.resellerID, "error", err)
+			c.String(http.StatusServiceUnavailable, "payment configuration error")
+			return
+		}
+		params.Discounts = append(params.Discounts, &stripe.CheckoutSessionDiscountParams{Coupon: stripe.String(sc.ID)})
+	}
+
 	// Exclusive tax is added to the amount charged as its own line,
 	// named for the jurisdiction on the receipt. Inclusive tax already
 	// lives inside the listed price and is never added again. Stripe
@@ -377,11 +434,16 @@ func (h *StripeHandler) CheckoutByPlan(c *gin.Context) {
 	for k, v := range terms {
 		params.Metadata[k] = v
 	}
-	if len(terms) > 0 {
+	for k, v := range attr.metadata() {
+		params.Metadata[k] = v
+	}
+	if len(terms) > 0 || attr.wholesale != nil {
 		// The stamped facts account for every minor unit of the
 		// charge; a Stripe promotion code added at checkout would
 		// silently rewrite the split the ledger reconstructs from
-		// them. Sessions without terms keep today's behaviour.
+		// them. Sessions without money terms keep today's behaviour —
+		// pure attribution stamps name who brought the sale and are
+		// unaffected by how the totals split.
 		params.AllowPromotionCodes = nil
 	}
 

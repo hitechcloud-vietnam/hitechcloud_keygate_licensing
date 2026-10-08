@@ -22,6 +22,7 @@ import {
   ScrollText,
   Settings,
   ShoppingCart,
+  Star,
   Store,
   Tag,
   Ticket,
@@ -65,6 +66,7 @@ export function AdminLayout() {
         { to: "/admin/plans", label: t("nav.plans"), icon: Layers },
         { to: "/admin/addons", label: t("nav.addons"), icon: Blocks },
         { to: "/admin/releases", label: t("nav.releases"), icon: Rocket },
+        { to: "/admin/reviews", label: t("nav.reviews"), icon: Star },
       ],
     },
     {

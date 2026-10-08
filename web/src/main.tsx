@@ -27,6 +27,7 @@ import ProductsPage from "@/pages/admin/products"
 import ReleasesPage from "@/pages/admin/releases"
 import ResellerDetailPage from "@/pages/admin/reseller-detail"
 import ResellersPage from "@/pages/admin/resellers"
+import ReviewsPage from "@/pages/admin/reviews"
 import SettingsPage from "@/pages/admin/settings"
 import TaxRatesPage from "@/pages/admin/tax-rates"
 import WebhooksPage from "@/pages/admin/webhooks"
@@ -88,6 +89,7 @@ createRoot(document.getElementById("root")!).render(
                       <Route index element={<DashboardPage />} />
                       <Route path="products" element={<ProductsPage />} />
                       <Route path="categories" element={<CategoriesPage />} />
+                      <Route path="reviews" element={<ReviewsPage />} />
                       <Route path="plans" element={<PlansPage />} />
                       <Route path="releases" element={<ReleasesPage />} />
                       <Route path="licenses" element={<LicensesPage />} />

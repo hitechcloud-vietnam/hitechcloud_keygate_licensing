@@ -1,13 +1,30 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, ArrowLeft, BookOpen, Download, Github, Globe, Package } from "lucide-react"
+import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
+import { ProductCard } from "@/components/product-card"
+import { StarRating, StarRatingInput } from "@/components/star-rating"
+import { showToast } from "@/components/toast"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useServerPagination } from "@/components/ui/data-table"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
+import { useAuth } from "@/hooks/use-auth"
 import { useI18n } from "@/i18n"
-import type { MarketplaceProduct } from "@/lib/api"
-import { ApiError, marketplace } from "@/lib/api"
+import type { MarketplaceProduct, PublicReview } from "@/lib/api"
+import { ApiError, marketplace, portal } from "@/lib/api"
 import { formatMinor } from "@/lib/money"
 import { formatDate } from "@/lib/utils"
 
@@ -17,6 +34,8 @@ import { formatDate } from "@/lib/utils"
 // state. The §223 catalog enrichment fields (description, logo, images,
 // doc/website/repo URLs, vendor) are rendered when present and
 // tolerated when null/absent — the API may not carry them yet.
+// Below the catalog: the Reviews section (approved rows + aggregate +
+// the signed-in customer's write form) and the related-products rail.
 export default function MarketplaceProductPage() {
   const { t } = useI18n()
   const { slug = "" } = useParams()
@@ -269,6 +288,9 @@ function ProductDetail({ product }: { product: MarketplaceProduct }) {
               )}
             </CardContent>
           </Card>
+
+          {/* Reviews: aggregate + approved rows + the write side */}
+          <ReviewsSection product={product} />
         </div>
 
         {/* Sidebar: links */}
@@ -323,6 +345,371 @@ function ProductDetail({ product }: { product: MarketplaceProduct }) {
             </Card>
           )}
         </div>
+      </div>
+
+      {/* Related products */}
+      <RelatedRail product={product} />
+    </div>
+  )
+}
+
+// ─── Reviews (marketplace read side + portal write side) ───
+//
+// The section reads GET /marketplace/products/:slug/reviews: one page
+// of APPROVED reviews plus the aggregate in the same response
+// (rating_average_bps / rating_count — integer basis points, 10000 =
+// 1 star). The write side is the portal's one-review-per-product seam:
+// POST starts a pending review, PATCH edits the author's own words,
+// DELETE takes it down. There is no read endpoint for one's own review,
+// so "you already have one" is discovered the honest way — the 409
+// DUPLICATE answer to a submit — and the form flips to edit mode with
+// a friendly note when it arrives.
+function ReviewsSection({ product }: { product: MarketplaceProduct }) {
+  const { t } = useI18n()
+  const pg = useServerPagination(5, [product.id])
+
+  const reviewsQuery = useQuery({
+    queryKey: ["marketplace", "product", product.slug, "reviews", pg.page, pg.pageSize],
+    queryFn: () => marketplace.reviews(product.slug, pg.params),
+  })
+
+  const data = reviewsQuery.data
+  const { items: reviews, total, totalPages } = pg.from(data, data?.reviews)
+  const offset = data?.offset ?? 0
+  const from = reviews.length ? offset + 1 : 0
+  const to = offset + reviews.length
+  // The list response carries the aggregate beside its rows; before it
+  // lands (or if the fetch failed) the product page's own aggregate
+  // stands in — the two are the same approved-reviews summary.
+  const avgBps = data?.rating_average_bps ?? product.rating_average_bps ?? 0
+  const count = data?.rating_count ?? product.rating_count ?? 0
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{t("marketplace.reviewsSection")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Aggregate header: stars + numeric average + count */}
+        {count > 0 ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <StarRating valueBps={avgBps} showValue />
+            <span className="text-sm text-muted-foreground">
+              {count === 1 ? t("marketplace.reviewsCountOne") : t("marketplace.reviewsCount", { count })}
+            </span>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">{t("marketplace.reviewsEmpty")}</p>
+        )}
+
+        {/* One page of approved reviews, newest first */}
+        {reviewsQuery.isLoading ? (
+          <div className="h-24 animate-pulse bg-muted rounded-lg" />
+        ) : reviewsQuery.isError ? (
+          <div className="flex items-center gap-3 py-4">
+            <div className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-5 w-5" />
+              <span>{t("marketplace.loadError")}</span>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => reviewsQuery.refetch()}>
+              {t("common.retry")}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {reviews.map((r) => (
+              <ReviewItem key={r.id} review={r} />
+            ))}
+          </div>
+        )}
+
+        {/* Pager */}
+        {total > pg.pageSize && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">{t("marketplace.showingRange", { from, to, total })}</p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={pg.page === 0} onClick={() => pg.setPage(pg.page - 1)}>
+                {t("marketplace.prev")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pg.page >= totalPages - 1}
+                onClick={() => pg.setPage(pg.page + 1)}
+              >
+                {t("marketplace.next")}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <Separator />
+        <ReviewForm
+          product={product}
+          onChanged={() => {
+            reviewsQuery.refetch()
+          }}
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
+// ReviewItem — one approved review: stars, headline, the author's
+// display name and date, the body, and the vendor's public answer
+// when moderation wrote one.
+function ReviewItem({ review }: { review: PublicReview }) {
+  const { t } = useI18n()
+  return (
+    <div className="space-y-2 border-b pb-6 last:border-0 last:pb-0">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <StarRating valueBps={review.rating * 10000} size="sm" />
+        {review.title && <span className="font-medium">{review.title}</span>}
+        <span className="ml-auto text-xs text-muted-foreground">{formatDate(review.created_at)}</span>
+      </div>
+      <p className="text-sm text-muted-foreground">{review.customer_name || t("reviews.anonymous")}</p>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{review.body}</p>
+      {review.admin_reply && (
+        <div className="rounded-md border bg-muted/50 p-3">
+          <p className="text-xs font-medium">{t("reviews.adminReplyLabel")}</p>
+          <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{review.admin_reply}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ReviewForm — the signed-in customer's write side of one product's
+// review. Starts in write mode (POST); a 409 DUPLICATE answer flips it
+// to edit mode (PATCH/DELETE) with a note, because the API has no
+// "your review" read endpoint: one review per (product, session
+// account), and only the author can ever see or touch their own row.
+function ReviewForm({ product, onChanged }: { product: MarketplaceProduct; onChanged: () => void }) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const { user, loading } = useAuth()
+  const [mode, setMode] = useState<"write" | "edit">("write")
+  const [rating, setRating] = useState(0)
+  const [title, setTitle] = useState("")
+  const [body, setBody] = useState("")
+  // The title the form was filled from, when we know it (a review we
+  // just created). Undefined after a 409 DUPLICATE: the PATCH then
+  // names the title only when one is typed, so a blank box keeps the
+  // stored one instead of silently wiping it.
+  const [knownTitle, setKnownTitle] = useState<string | undefined>(undefined)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["marketplace", "product", product.slug, "reviews"] })
+    qc.invalidateQueries({ queryKey: ["marketplace", "product", product.slug] })
+    qc.invalidateQueries({ queryKey: ["marketplace", "products"] })
+  }
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      portal.createProductReview(product.id, { rating, title: title.trim() || undefined, body: body.trim() }),
+    onSuccess: () => {
+      showToast(t("toast.reviewSubmitted"), "success")
+      // We now hold the review ourselves: edit/delete from here on.
+      setMode("edit")
+      setKnownTitle(title.trim())
+      setNotice(t("reviews.pendingNote"))
+      invalidate()
+      onChanged()
+    },
+    onError: (e: Error) => {
+      if (e instanceof ApiError && e.code === "DUPLICATE") {
+        // Already reviewed this product: swap the form into edit mode.
+        setMode("edit")
+        setNotice(t("reviews.duplicateNote"))
+        showToast(t("reviews.duplicateNote"), "error")
+      } else {
+        showToast(e.message, "error")
+      }
+    },
+  })
+
+  const updateMut = useMutation({
+    mutationFn: () => {
+      const cleanTitle = title.trim()
+      // Merge semantics: a title the author did not touch is left out
+      // so the stored one survives; a cleared known title clears it.
+      const sendTitle = cleanTitle !== "" || (knownTitle !== undefined && cleanTitle !== knownTitle)
+      return portal.updateProductReview(product.id, {
+        ...(sendTitle ? { title: cleanTitle } : {}),
+        body: body.trim(),
+      })
+    },
+    onSuccess: () => {
+      showToast(t("toast.reviewUpdated"), "success")
+      setKnownTitle(title.trim())
+      invalidate()
+      onChanged()
+    },
+    onError: (e: Error) => {
+      if (e instanceof ApiError && e.status === 404) {
+        // The review we thought we had is not there — back to write.
+        setMode("write")
+        setKnownTitle(undefined)
+        setNotice(null)
+      }
+      showToast(e.message, "error")
+    },
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: () => portal.deleteProductReview(product.id),
+    onSuccess: () => {
+      showToast(t("toast.reviewRemoved"), "success")
+      setMode("write")
+      setRating(0)
+      setTitle("")
+      setBody("")
+      setKnownTitle(undefined)
+      setNotice(null)
+      setConfirmingDelete(false)
+      invalidate()
+      onChanged()
+    },
+    onError: (e: Error) => {
+      if (e instanceof ApiError && e.status === 404) {
+        setMode("write")
+        setKnownTitle(undefined)
+        setNotice(null)
+        setConfirmingDelete(false)
+      }
+      showToast(e.message, "error")
+    },
+  })
+
+  if (loading) return null
+  if (!user) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-sm text-muted-foreground">{t("reviews.signInPrompt")}</p>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/login">{t("marketplace.signIn")}</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  const pending = createMut.isPending || updateMut.isPending || deleteMut.isPending
+
+  const submit = () => {
+    const cleanTitle = title.trim()
+    const cleanBody = body.trim()
+    if (mode === "write" && rating < 1) return showToast(t("reviews.errRating"), "error")
+    if (!cleanBody) return showToast(t("reviews.errBody"), "error")
+    if (cleanTitle.length > 120) return showToast(t("reviews.errTitleTooLong"), "error")
+    if (cleanBody.length > 4000) return showToast(t("reviews.errBodyTooLong"), "error")
+    if (mode === "write") createMut.mutate()
+    else updateMut.mutate()
+  }
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold">{mode === "write" ? t("reviews.writeTitle") : t("reviews.editTitle")}</h3>
+      {notice && <p className="text-sm text-muted-foreground">{notice}</p>}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+        className="space-y-4"
+      >
+        {mode === "write" && (
+          <div className="space-y-2">
+            <Label>{t("reviews.ratingLabel")}</Label>
+            <StarRatingInput value={rating} onChange={setRating} disabled={pending} />
+          </div>
+        )}
+        <div className="space-y-2">
+          <Label htmlFor="review-title">{t("reviews.titleLabel")}</Label>
+          <Input
+            id="review-title"
+            value={title}
+            maxLength={120}
+            placeholder={t("reviews.titlePlaceholder")}
+            onChange={(e) => setTitle(e.target.value)}
+            disabled={pending}
+          />
+          {mode === "edit" && knownTitle === undefined && (
+            <p className="text-xs text-muted-foreground">{t("reviews.titleKeepHint")}</p>
+          )}
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="review-body">{t("reviews.bodyLabel")}</Label>
+          <textarea
+            id="review-body"
+            value={body}
+            maxLength={4000}
+            rows={4}
+            placeholder={t("reviews.bodyPlaceholder")}
+            onChange={(e) => setBody(e.target.value)}
+            disabled={pending}
+            className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={pending}>
+            {mode === "write" ? t("reviews.submit") : t("reviews.update")}
+          </Button>
+          {mode === "edit" && (
+            <Button
+              type="button"
+              variant="outline"
+              className="text-destructive"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={pending}
+            >
+              {t("reviews.deleteMine")}
+            </Button>
+          )}
+        </div>
+      </form>
+
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("reviews.deleteMineTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("reviews.deleteMineDesc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => deleteMut.mutate()}
+            >
+              {t("common.delete")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// RelatedRail — the "you may also like" rail: products sharing a
+// category with this one (GET .../related), rendered as the same
+// ProductCard the listing uses. Decorative: hidden while loading, on
+// error, and when the product has no neighbours.
+function RelatedRail({ product }: { product: MarketplaceProduct }) {
+  const { t } = useI18n()
+  const query = useQuery({
+    queryKey: ["marketplace", "product", product.slug, "related"],
+    queryFn: () => marketplace.related(product.slug),
+  })
+  const products = query.data?.products || []
+  if (query.isLoading || query.isError || products.length === 0) return null
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold tracking-tight">{t("marketplace.related")}</h2>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {products.map((p) => (
+          <ProductCard key={p.id} product={p} />
+        ))}
       </div>
     </div>
   )
