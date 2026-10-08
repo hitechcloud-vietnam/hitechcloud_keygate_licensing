@@ -137,6 +137,40 @@ type Product struct {
 	// and skip the license check. Empty when not set.
 	DownloadURL string `bun:",notnull,default:''" json:"download_url"`
 
+	// ─── Catalog fields (plan §223) ───
+	//
+	// The marketing half of a product row: what the public storefront
+	// shows and the admin edits. The columns are nullable (rows written
+	// before them read as empty — bun scans NULL into the zero value),
+	// and the write convention is the usual one: omitted on update
+	// keeps the stored value, an explicit empty string clears it.
+	//
+	// Images is the display-ordered gallery, a Postgres text array
+	// ([]string with bun:",array"; a nil slice scans from / writes
+	// NULL). A nil slice marshals to JSON null, so the API layers
+	// render it as [] — see the admin DTO and marketplaceProductJSON.
+	// Every URL here must be http(s), validated on write and never
+	// fetched server-side.
+
+	// Description is the long product-page copy.
+	Description string `json:"description"`
+	// ShortDescription is the one-liner listing cards show.
+	ShortDescription string `json:"short_description"`
+	// LogoURL links to the product logo.
+	LogoURL string `json:"logo_url"`
+	// Images are the gallery screenshots / artwork, in display order.
+	Images []string `bun:",array" json:"images"`
+	// DocumentationURL is the docs site or manual.
+	DocumentationURL string `json:"documentation_url"`
+	// WebsiteURL is the product's marketing home page.
+	WebsiteURL string `json:"website_url"`
+	// RepositoryURL is the source repository, when public.
+	RepositoryURL string `json:"repository_url"`
+	// Vendor is the §223 vendor name shown on the storefront. Plain
+	// display text for now; a future vendors table (plan §1213) can
+	// take over without breaking this field.
+	Vendor string `json:"vendor"`
+
 	// RequireSigning: when true (the safe default for new products),
 	// publishing a release fails if no active signing key is configured.
 	// Flip to false only for products that intentionally ship unsigned

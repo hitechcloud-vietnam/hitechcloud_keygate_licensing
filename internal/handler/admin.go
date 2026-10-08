@@ -396,6 +396,127 @@ func (h *AdminHandler) Stats(c *gin.Context) {
 
 // ─── Products ───
 
+// The §223 catalog fields — description, short_description, logo_url,
+// images, documentation_url, website_url, repository_url, vendor — and
+// the product's category links share one write convention:
+//
+//   - omitted on update = keep the stored value (for images and
+//     category_ids: the key absent or JSON null)
+//   - explicit empty string = clear what is stored (for images and
+//     category_ids: an explicit empty array `[]`)
+//
+// Every URL field — logo_url, documentation_url, website_url,
+// repository_url and each entry of images — must be a full http(s)
+// URL, validated with net/url on write and never fetched server-side.
+
+// Bounds for the catalog fields. The text limits are sanity caps on
+// storefront copy; the URL limits come from ValidateHTTPURL.
+const (
+	maxProductDescription      = 10000
+	maxProductShortDescription = 500
+	maxProductVendor           = 200
+	maxProductImages           = 32
+)
+
+// adminProductJSON is the admin's view of a product: the whole row
+// plus its category facets, so the edit form can prefill its
+// multi-select from one response. Images shadows the embedded model's
+// field so the JSON is always an array — a nil bun slice would
+// otherwise marshal as null.
+type adminProductJSON struct {
+	*model.Product
+	Images     []string          `json:"images"`
+	Categories []*model.Category `json:"categories"`
+}
+
+func adminProduct(p *model.Product, cats []*model.Category) adminProductJSON {
+	if cats == nil {
+		cats = []*model.Category{}
+	}
+	images := p.Images
+	if images == nil {
+		images = []string{}
+	}
+	return adminProductJSON{Product: p, Images: images, Categories: cats}
+}
+
+// checkCatalogText bounds one optional free-text catalog field.
+// Empty is allowed — it clears the field — and length is the only
+// rule: this is storefront copy, not structured data.
+func checkCatalogText(field, value string, max int) *apperr.AppError {
+	if len(value) > max {
+		return apperr.BadRequest(field + " must be at most " + strconv.Itoa(max) + " chars")
+	}
+	return nil
+}
+
+// validateOptionalURL checks one URL catalog field. Empty is allowed
+// (it clears the field); anything else must be a full http(s) URL.
+func validateOptionalURL(field, value string) *apperr.AppError {
+	if value == "" {
+		return nil
+	}
+	return apperr.ValidateHTTPURL(field, value)
+}
+
+// normalizeImages folds a submitted image list into its stored form:
+// every entry trimmed and validated as an http(s) URL, in the order
+// sent. nil means "not sent" and survives as nil, so an update can
+// tell keep from clear; `[]` clears the gallery.
+func normalizeImages(raw []string) ([]string, *apperr.AppError) {
+	if raw == nil {
+		return nil, nil
+	}
+	if len(raw) > maxProductImages {
+		return nil, apperr.BadRequest("images must contain at most " + strconv.Itoa(maxProductImages) + " URLs")
+	}
+	out := make([]string, 0, len(raw))
+	for i, u := range raw {
+		u = strings.TrimSpace(u)
+		if err := apperr.ValidateHTTPURL("images["+strconv.Itoa(i)+"]", u); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+// normalizeCategoryIDs folds a submitted category_ids list the same
+// way ReplaceProductCategories folds it: entries trimmed, empties
+// dropped, duplicates collapsed. nil — the key absent or null —
+// survives as nil: it means "do not touch the links", while `[]`
+// clears them.
+func normalizeCategoryIDs(raw []string) []string {
+	if raw == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// checkCategoryIDs refuses a category_ids list that names a category
+// that does not exist, before anything is written: a typo is the
+// caller's 400, not a foreign-key 500 after the product row has
+// already changed.
+func (h *AdminHandler) checkCategoryIDs(c *gin.Context, ids []string) bool {
+	for _, id := range ids {
+		if _, err := h.Store.FindCategoryByID(c, id); err != nil {
+			response.BadRequest(c, "unknown category id: "+clipForMessage(id))
+			return false
+		}
+	}
+	return true
+}
+
 func (h *AdminHandler) ListProducts(c *gin.Context) {
 	// type=desktop,hybrid narrows the catalogue to the kinds the
 	// caller can use. An unknown kind is refused rather than ignored:
@@ -418,7 +539,23 @@ func (h *AdminHandler) ListProducts(c *gin.Context) {
 		response.Internal(c, err)
 		return
 	}
-	listOK(c, "products", products, total, page)
+	// Facets ride with every row so a listing can show badges and the
+	// edit form can prefill its multi-select: one batch query, however
+	// many rows the page carries.
+	ids := make([]string, 0, len(products))
+	for _, p := range products {
+		ids = append(ids, p.ID)
+	}
+	catsBy, err := h.Store.CategoriesForProducts(c, ids)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	items := make([]adminProductJSON, 0, len(products))
+	for _, p := range products {
+		items = append(items, adminProduct(p, catsBy[p.ID]))
+	}
+	listOK(c, "products", items, total, page)
 }
 
 func (h *AdminHandler) GetProduct(c *gin.Context) {
@@ -427,7 +564,14 @@ func (h *AdminHandler) GetProduct(c *gin.Context) {
 		response.NotFound(c, "product not found")
 		return
 	}
-	response.OK(c, p)
+	// Categories come with the row so the edit form's multi-select
+	// prefills from one response.
+	cats, err := h.Store.CategoriesForProducts(c, []string{p.ID})
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, adminProduct(p, cats[p.ID]))
 }
 
 func (h *AdminHandler) CreateProduct(c *gin.Context) {
@@ -442,6 +586,21 @@ func (h *AdminHandler) CreateProduct(c *gin.Context) {
 		FeedLicenseRequired bool `json:"feed_license_required"`
 		// DownloadURL: optional page for {{.DownloadURL}} in emails.
 		DownloadURL string `json:"download_url"`
+		// §223 catalog fields, all optional: empty at creation is a
+		// storefront with no blurb yet, filled in later. See the write
+		// convention at the top of the Products section.
+		Description      string   `json:"description"`
+		ShortDescription string   `json:"short_description"`
+		LogoURL          string   `json:"logo_url"`
+		Images           []string `json:"images"`
+		DocumentationURL string   `json:"documentation_url"`
+		WebsiteURL       string   `json:"website_url"`
+		RepositoryURL    string   `json:"repository_url"`
+		Vendor           string   `json:"vendor"`
+		// CategoryIDs are the marketplace facets to link at creation.
+		// Omitted (or an explicit empty array) starts the product with
+		// no links; ids link it to existing categories.
+		CategoryIDs []string `json:"category_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "name, slug, and type are required")
@@ -467,6 +626,49 @@ func (h *AdminHandler) CreateProduct(c *gin.Context) {
 		return
 	}
 
+	// §223 catalog fields: trimmed, bounded, and every URL validated
+	// as http(s) — never fetched. Refused before anything is written.
+	req.Description = strings.TrimSpace(req.Description)
+	req.ShortDescription = strings.TrimSpace(req.ShortDescription)
+	req.LogoURL = strings.TrimSpace(req.LogoURL)
+	req.DocumentationURL = strings.TrimSpace(req.DocumentationURL)
+	req.WebsiteURL = strings.TrimSpace(req.WebsiteURL)
+	req.RepositoryURL = strings.TrimSpace(req.RepositoryURL)
+	req.Vendor = strings.TrimSpace(req.Vendor)
+	for _, tc := range []struct {
+		field, value string
+		max          int
+	}{
+		{"description", req.Description, maxProductDescription},
+		{"short_description", req.ShortDescription, maxProductShortDescription},
+		{"vendor", req.Vendor, maxProductVendor},
+	} {
+		if err := checkCatalogText(tc.field, tc.value, tc.max); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+	}
+	for _, tc := range []struct{ field, value string }{
+		{"logo_url", req.LogoURL},
+		{"documentation_url", req.DocumentationURL},
+		{"website_url", req.WebsiteURL},
+		{"repository_url", req.RepositoryURL},
+	} {
+		if err := validateOptionalURL(tc.field, tc.value); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+	}
+	images, imgErr := normalizeImages(req.Images)
+	if imgErr != nil {
+		response.BadRequest(c, imgErr.Message)
+		return
+	}
+	categoryIDs := normalizeCategoryIDs(req.CategoryIDs)
+	if req.CategoryIDs != nil && !h.checkCategoryIDs(c, categoryIDs) {
+		return
+	}
+
 	// Same fence as switching the gate on later: while the maintenance
 	// features are off, a replica that predates them may still be
 	// serving, and it would answer the feed without a licence.
@@ -475,10 +677,18 @@ func (h *AdminHandler) CreateProduct(c *gin.Context) {
 	}
 
 	p := &model.Product{Name: req.Name, Slug: req.Slug, Type: req.Type, FeedLicenseRequired: req.FeedLicenseRequired,
-		DownloadURL: req.DownloadURL}
+		DownloadURL: req.DownloadURL, Description: req.Description, ShortDescription: req.ShortDescription,
+		LogoURL: req.LogoURL, Images: images, DocumentationURL: req.DocumentationURL,
+		WebsiteURL: req.WebsiteURL, RepositoryURL: req.RepositoryURL, Vendor: req.Vendor}
 	if err := h.Store.CreateProduct(c, p); err != nil {
 		response.Err(c, http.StatusConflict, "DUPLICATE", "product slug already exists")
 		return
+	}
+	if req.CategoryIDs != nil {
+		if err := h.Store.ReplaceProductCategories(c, p.ID, categoryIDs); err != nil {
+			response.Internal(c, err)
+			return
+		}
 	}
 
 	h.Store.Audit(c, &model.AuditLog{
@@ -488,7 +698,12 @@ func (h *AdminHandler) CreateProduct(c *gin.Context) {
 			"feed_license_required": req.FeedLicenseRequired},
 	})
 
-	response.Created(c, p)
+	cats, err := h.Store.CategoriesForProducts(c, []string{p.ID})
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.Created(c, adminProduct(p, cats[p.ID]))
 }
 
 func (h *AdminHandler) UpdateProduct(c *gin.Context) {
@@ -507,6 +722,21 @@ func (h *AdminHandler) UpdateProduct(c *gin.Context) {
 		RequireSigning          *bool   `json:"require_signing"`
 		FeedLicenseRequired     *bool   `json:"feed_license_required"`
 		DownloadURL             *string `json:"download_url"`
+		// §223 catalog fields: a pointer is "sent, maybe empty" — nil
+		// keeps the stored value, a pointer to "" clears it. See the
+		// write convention at the top of the Products section.
+		Description      *string `json:"description"`
+		ShortDescription *string `json:"short_description"`
+		LogoURL          *string `json:"logo_url"`
+		DocumentationURL *string `json:"documentation_url"`
+		WebsiteURL       *string `json:"website_url"`
+		RepositoryURL    *string `json:"repository_url"`
+		Vendor           *string `json:"vendor"`
+		// images and category_ids are lists: the key absent (or null)
+		// keeps the stored value, an explicit `[]` clears it, a
+		// non-empty list replaces it wholesale.
+		Images      []string `json:"images"`
+		CategoryIDs []string `json:"category_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "invalid request body")
@@ -628,6 +858,88 @@ func (h *AdminHandler) UpdateProduct(c *gin.Context) {
 		}
 		p.DownloadURL = v
 		cols = append(cols, "download_url")
+	}
+	// §223 catalog fields: omitted keeps the stored value, an explicit
+	// empty string clears it — images and category_ids instead clear
+	// on an explicit empty array. Every URL is validated here, before
+	// anything is written, and never fetched.
+	if req.Description != nil {
+		v := strings.TrimSpace(*req.Description)
+		if err := checkCatalogText("description", v, maxProductDescription); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+		p.Description = v
+		cols = append(cols, "description")
+	}
+	if req.ShortDescription != nil {
+		v := strings.TrimSpace(*req.ShortDescription)
+		if err := checkCatalogText("short_description", v, maxProductShortDescription); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+		p.ShortDescription = v
+		cols = append(cols, "short_description")
+	}
+	if req.Vendor != nil {
+		v := strings.TrimSpace(*req.Vendor)
+		if err := checkCatalogText("vendor", v, maxProductVendor); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+		p.Vendor = v
+		cols = append(cols, "vendor")
+	}
+	if req.LogoURL != nil {
+		v := strings.TrimSpace(*req.LogoURL)
+		if err := validateOptionalURL("logo_url", v); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+		p.LogoURL = v
+		cols = append(cols, "logo_url")
+	}
+	if req.DocumentationURL != nil {
+		v := strings.TrimSpace(*req.DocumentationURL)
+		if err := validateOptionalURL("documentation_url", v); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+		p.DocumentationURL = v
+		cols = append(cols, "documentation_url")
+	}
+	if req.WebsiteURL != nil {
+		v := strings.TrimSpace(*req.WebsiteURL)
+		if err := validateOptionalURL("website_url", v); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+		p.WebsiteURL = v
+		cols = append(cols, "website_url")
+	}
+	if req.RepositoryURL != nil {
+		v := strings.TrimSpace(*req.RepositoryURL)
+		if err := validateOptionalURL("repository_url", v); err != nil {
+			response.BadRequest(c, err.Message)
+			return
+		}
+		p.RepositoryURL = v
+		cols = append(cols, "repository_url")
+	}
+	images, imgErr := normalizeImages(req.Images)
+	if imgErr != nil {
+		response.BadRequest(c, imgErr.Message)
+		return
+	}
+	if req.Images != nil {
+		p.Images = images
+		cols = append(cols, "images")
+	}
+	// category_ids: nil keeps the links, `[]` clears them, ids replace
+	// them. Unknown ids are the caller's 400 before anything is written.
+	categoryIDs := normalizeCategoryIDs(req.CategoryIDs)
+	if req.CategoryIDs != nil && !h.checkCategoryIDs(c, categoryIDs) {
+		return
 	}
 	wasGated, wasReleases := p.FeedLicenseRequired, model.ProductSupports(prevType, model.CapReleases)
 	// gatingNow marks a request that switches the gate on. The instant
@@ -760,11 +1072,26 @@ func (h *AdminHandler) UpdateProduct(c *gin.Context) {
 		response.Conflict(c, waiting.code, waiting.message, waiting.details)
 		return
 	}
+	// The category links are their own transaction beside the row
+	// write — ReplaceProductCategories is whole-set and refuses an
+	// unknown id, and the ids were checked above first. When the feed
+	// gate deferred the request they are part of "not applied".
+	if req.CategoryIDs != nil {
+		if err := h.Store.ReplaceProductCategories(c, p.ID, categoryIDs); err != nil {
+			response.Internal(c, err)
+			return
+		}
+	}
 	h.Store.Audit(c, &model.AuditLog{
 		Entity: "product", EntityID: p.ID, Action: "updated",
 		ActorType: "admin", ActorID: adminID(c),
 	})
-	response.OK(c, p)
+	cats, err := h.Store.CategoriesForProducts(c, []string{p.ID})
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, adminProduct(p, cats[p.ID]))
 }
 
 func (h *AdminHandler) DeleteProduct(c *gin.Context) {
@@ -802,6 +1129,48 @@ func (h *AdminHandler) DeleteProduct(c *gin.Context) {
 		ActorType: "admin", ActorID: adminID(c),
 	})
 	response.NoContent(c)
+}
+
+// SetProductCategories — PUT /admin/products/:id/categories
+//
+// Replaces the product's marketplace category links wholesale: the
+// multi-select's own save, without re-sending the whole product.
+// `category_ids` is required — an explicit empty array clears every
+// link (the field's clear convention) — and each id must name an
+// existing category, refused before anything is written. The answer
+// is the product with its new facets, the same shape as GetProduct.
+func (h *AdminHandler) SetProductCategories(c *gin.Context) {
+	p, err := h.Store.FindProductByID(c, c.Param("id"))
+	if err != nil {
+		response.NotFound(c, "product not found")
+		return
+	}
+	var req struct {
+		CategoryIDs *[]string `json:"category_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.CategoryIDs == nil {
+		response.BadRequest(c, `category_ids is required (use [] to clear the product's categories)`)
+		return
+	}
+	ids := normalizeCategoryIDs(*req.CategoryIDs)
+	if !h.checkCategoryIDs(c, ids) {
+		return
+	}
+	if err := h.Store.ReplaceProductCategories(c, p.ID, ids); err != nil {
+		response.Internal(c, err)
+		return
+	}
+	h.Store.Audit(c, &model.AuditLog{
+		Entity: "product", EntityID: p.ID, Action: "updated",
+		ActorType: "admin", ActorID: adminID(c),
+		Changes: map[string]any{"category_ids": ids},
+	})
+	cats, err := h.Store.CategoriesForProducts(c, []string{p.ID})
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, adminProduct(p, cats[p.ID]))
 }
 
 // ─── Plans ───

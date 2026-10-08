@@ -187,6 +187,28 @@ export const invites = {
     ),
 }
 
+// ─── Marketplace (public, anonymous) ───
+// The storefront's read side (plan §30 + Phase 6): browse categories,
+// discover products, open a product page. Anonymous and read-only.
+// The API accepts only sort=name|newest (anything else is 400) and
+// answers a listing as data.{products,total,limit,offset} and a
+// product page as data.product. Prices are not in this payload — they
+// live on Stripe — so plan cards carry price/currency as null.
+export const marketplace = {
+  categories: () => get<{ categories: MarketplaceCategory[] }>("/marketplace/categories"),
+  products: (params?: {
+    search?: string
+    // The ?category= filter takes a category SLUG, not its id.
+    category?: string
+    sort?: string // "name" | "newest"
+    order?: "asc" | "desc"
+    limit?: number
+    offset?: number
+  }) => get<Paged<{ products: MarketplaceProduct[] }>>(`/marketplace/products?${listQuery(params)}`),
+  // An unknown slug answers 404 exactly like a failed lookup.
+  product: (slug: string) => get<{ product: MarketplaceProduct }>(`/marketplace/products/${encodeURIComponent(slug)}`),
+}
+
 // ─── Portal ───
 export const portal = {
   licenses: () => get<{ licenses: PortalLicense[]; renewals_enabled?: boolean }>("/portal/licenses"),
@@ -654,6 +676,18 @@ export const admin = {
   // Price preview without persistence — registered as /admin/quotes,
   // outside /orders/:id so it cannot collide with that param route.
   quoteOrder: (data: QuoteRequest) => post<QuoteResult>("/admin/quotes", data),
+
+  // ─── Categories (marketplace catalog) ───
+  // Discovery facets only — no price, entitlement or license meaning.
+  // Deleting a category detaches its products (the join cascades), it
+  // never blocks on attached products. Update is PATCH (partial body);
+  // create derives a slug from the name when one is not sent.
+  listCategories: (params?: { search?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ categories: Category[] }>>(`/admin/categories?${listQuery(params)}`),
+  getCategory: (id: string) => get<Category>(`/admin/categories/${id}`),
+  createCategory: (data: CategoryInput) => post<Category>("/admin/categories", data),
+  updateCategory: (id: string, data: Partial<CategoryInput>) => patch<Category>(`/admin/categories/${id}`, data),
+  deleteCategory: (id: string) => del(`/admin/categories/${id}`),
 }
 
 // ─── Types ───
@@ -1394,4 +1428,89 @@ export interface CheckoutQuoteResult {
   lines?: CheckoutQuoteLine[]
   applied_coupon: CheckoutAppliedCoupon | null
   tax_rates?: CheckoutQuoteTaxRate[]
+}
+
+// ─── Categories (marketplace catalog) ───
+// The admin category row: the catalog facet the marketplace browses
+// by. `slug` is the URL handle (?category=<slug>), `position` orders
+// the catalog (0 = top). Create/update accept a subset; the server
+// derives a slug from the name when none is sent.
+export interface Category {
+  id: string
+  name: string
+  slug: string
+  description: string
+  position: number
+  created_at: string
+  updated_at: string
+}
+export interface CategoryInput {
+  name: string
+  slug?: string
+  description?: string
+  position?: number
+}
+
+// ─── Marketplace (public catalog) ───
+// These mirror the anonymous storefront's JSON exactly. The §223
+// catalog fields (description, short_description, logo_url, images,
+// documentation_url, website_url, repository_url, vendor) are
+// optional/nullable enrichment — rendered when present, tolerated
+// when null or absent. `price`/`currency` on a plan are integer minor
+// units / an ISO code, and are null in the marketplace payload today
+// (the Stripe Price is the source of truth).
+export interface MarketplaceCategory {
+  id: string
+  name: string
+  slug: string
+  description: string
+  position: number
+}
+export interface MarketplacePlan {
+  id: string
+  name: string
+  slug: string
+  license_type: string
+  billing_interval?: string
+  license_model?: string
+  checkout_id: string
+  price: number | null
+  currency: string | null
+}
+export interface MarketplaceArtifact {
+  platform: string
+  filename: string
+  file_size: number
+  content_type: string
+  sha256: string
+}
+export interface MarketplaceRelease {
+  version: string
+  channel: string
+  name: string
+  release_notes: string
+  published_at: string
+  artifacts: MarketplaceArtifact[]
+}
+export interface MarketplaceProduct {
+  id: string
+  name: string
+  slug: string
+  type: string
+  download_url?: string
+  minimum_supported_version?: string
+  minimum_supported_message?: string
+  created_at: string
+  categories: MarketplaceCategory[]
+  plans: MarketplacePlan[]
+  releases?: MarketplaceRelease[]
+  // Enrichment (nullable / may be absent).
+  description?: string | null
+  short_description?: string | null
+  logo_url?: string | null
+  images?: string[] | null
+  documentation_url?: string | null
+  website_url?: string | null
+  repository_url?: string | null
+  vendor?: string | null
 }

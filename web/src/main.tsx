@@ -3,7 +3,7 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
-import { AdminLayout, PortalLayout } from "@/components/layout"
+import { AdminLayout, PortalLayout, PublicLayout } from "@/components/layout"
 import { showToast, ToastBridge, ToastProvider } from "@/components/toast"
 import { AuthProvider } from "@/hooks/use-auth"
 import { SiteConfigProvider } from "@/hooks/use-site-config"
@@ -13,6 +13,7 @@ import AddonsPage from "@/pages/admin/addons"
 import AnalyticsPage from "@/pages/admin/analytics"
 import APIKeysPage from "@/pages/admin/api-keys"
 import AuditPage from "@/pages/admin/audit"
+import CategoriesPage from "@/pages/admin/categories"
 import CouponsPage from "@/pages/admin/coupons"
 import CustomersPage from "@/pages/admin/customers"
 import DashboardPage from "@/pages/admin/dashboard"
@@ -28,6 +29,8 @@ import WebhooksPage from "@/pages/admin/webhooks"
 import CheckoutPage from "@/pages/checkout"
 import CheckoutSuccessPage from "@/pages/checkout-success"
 import LoginPage from "@/pages/login"
+import MarketplacePage from "@/pages/marketplace"
+import MarketplaceProductPage from "@/pages/marketplace-product"
 import PortalAccountPage from "@/pages/portal/account"
 import PortalAPIKeysPage from "@/pages/portal/api-keys"
 import PortalDownloadsPage from "@/pages/portal/downloads"
@@ -64,10 +67,17 @@ createRoot(document.getElementById("root")!).render(
                     <Route path="/checkout/:checkout_id" element={<CheckoutPage />} />
                     <Route path="/accept-invite" element={<AcceptInvitePage />} />
 
+                    {/* Marketplace (public storefront, anonymous) */}
+                    <Route path="/marketplace" element={<PublicLayout />}>
+                      <Route index element={<MarketplacePage />} />
+                      <Route path="products/:slug" element={<MarketplaceProductPage />} />
+                    </Route>
+
                     {/* Admin */}
                     <Route path="/admin" element={<AdminLayout />}>
                       <Route index element={<DashboardPage />} />
                       <Route path="products" element={<ProductsPage />} />
+                      <Route path="categories" element={<CategoriesPage />} />
                       <Route path="plans" element={<PlansPage />} />
                       <Route path="releases" element={<ReleasesPage />} />
                       <Route path="licenses" element={<LicensesPage />} />

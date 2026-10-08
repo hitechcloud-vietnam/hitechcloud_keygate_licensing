@@ -146,7 +146,19 @@ func (h *PublicPlansHandler) ListPlans(c *gin.Context) {
 		active = append(active, out)
 	}
 
-	response.OK(c, gin.H{"plans": response.Array(active)})
+	response.OK(c, gin.H{
+		"plans": response.Array(active),
+		// The product block is the marketing context a pricing page
+		// renders above its table: the §223 catalog fields only — no
+		// Stripe material, no limits, no licence data.
+		"product": gin.H{
+			"name":              prod.Name,
+			"slug":              prod.Slug,
+			"short_description": prod.ShortDescription,
+			"description":       prod.Description,
+			"logo_url":          prod.LogoURL,
+		},
+	})
 }
 
 // price returns the Stripe unit amount for priceID, refreshing once the

@@ -504,6 +504,9 @@ func main() {
 	// Marketplace catalog (Phase 6): categories + public discovery.
 	categoryAdminH := handler.NewCategoryAdminHandler(db)
 	marketplaceH := handler.NewMarketplaceHandler(db)
+	// Developer API (plan §33): API-key authenticated endpoints for
+	// customer integrations — the portal-issued keys finally work.
+	devAPIH := handler.NewDeveloperAPIHandler(db)
 
 	// Sync ADMIN_EMAILS to database roles (backward compatibility / initial setup)
 	if len(cfg.AdminEmails) > 0 {
@@ -887,6 +890,18 @@ func main() {
 		marketplace.GET("/products/:slug", marketplaceH.GetProduct)
 	}
 
+	// Developer API (plan §33): versioned, customer-API-key
+	// authenticated. The rate limiter runs FIRST so unauthenticated
+	// floods are shed before any database lookup; scope gates follow
+	// auth (a key's scopes decide what it may read — fail-closed).
+	devMW := []gin.HandlerFunc{
+		middleware.RateLimitByIPScoped("dev_api", 60, time.Minute),
+		middleware.CustomerAPIKeyAuth(db),
+	}
+	v1.GET("/me", append(devMW, devAPIH.Me)...)
+	v1.GET("/orders", append(devMW, middleware.RequireCustomerScope(handler.ScopeOrdersRead), devAPIH.ListOrders)...)
+	v1.GET("/licenses", append(devMW, middleware.RequireCustomerScope(handler.ScopeLicensesRead), devAPIH.ListLicenses)...)
+
 	v1.POST("/webhook/stripe", middleware.RateLimitByIPScoped("stripe_webhook", 60, time.Minute), stripeH.Webhook)
 	// Stripe verify is hit by every successful checkout return, so the
 	// limit is generous, but the endpoint must NOT be naked: each call
@@ -1219,6 +1234,7 @@ func main() {
 		admin.GET("/products/:id", adminH.GetProduct)
 		admin.POST("/products", adminH.CreateProduct)
 		admin.PUT("/products/:id", adminH.UpdateProduct)
+		admin.PUT("/products/:id/categories", adminH.SetProductCategories)
 		admin.DELETE("/products/:id", adminH.DeleteProduct)
 
 		admin.GET("/plans", adminH.ListPlans)

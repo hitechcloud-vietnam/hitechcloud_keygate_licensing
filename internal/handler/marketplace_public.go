@@ -202,16 +202,35 @@ func (h *MarketplaceHandler) productCards(c *gin.Context, prods []*model.Product
 // The field selection is the whole of the leak-prevention on the
 // product side: it names what the catalog shows and nothing else, so a
 // column added to model.Product tomorrow does not silently become
-// public. The §223 catalog fields that have no column yet (description,
-// short description, logo, images, documentation/website/repository
-// URLs, vendor) are absent until their migration lands; download_url
-// and the maintenance floor are the marketing data that exists.
+// public. The §223 catalog fields (description, short description,
+// logo, images, documentation/website/repository URLs, vendor) are
+// catalog data and ride along — on list cards too, where the blurb and
+// logo are what a card renders. images is rendered as an array, never
+// null: a nil bun slice would marshal as null and every client would
+// have to special-case a product with no gallery.
+//
+// Still deliberately absent: storage keys, signatures and signing key
+// identifiers, Stripe price ids, per-licence limits (max_activations
+// and friends), entitlements and any licence material. The download
+// itself stays behind /license/download.
 func marketplaceProductJSON(p *model.Product, cats []*model.Category, plans []*model.Plan) gin.H {
+	images := p.Images
+	if images == nil {
+		images = []string{}
+	}
 	return gin.H{
 		"id":                        p.ID,
 		"name":                      p.Name,
 		"slug":                      p.Slug,
 		"type":                      p.Type,
+		"vendor":                    p.Vendor,
+		"description":               p.Description,
+		"short_description":         p.ShortDescription,
+		"logo_url":                  p.LogoURL,
+		"images":                    images,
+		"documentation_url":         p.DocumentationURL,
+		"website_url":               p.WebsiteURL,
+		"repository_url":            p.RepositoryURL,
 		"download_url":              p.DownloadURL,
 		"minimum_supported_version": p.MinimumSupportedVersion,
 		"minimum_supported_message": p.MinimumSupportedMessage,

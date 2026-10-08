@@ -16,6 +16,8 @@ import {
   ScrollText,
   Settings,
   ShoppingCart,
+  Store,
+  Tag,
   Ticket,
   User,
   Users,
@@ -69,6 +71,7 @@ export function AdminLayout() {
     {
       label: t("nav.commerce"),
       items: [
+        { to: "/admin/categories", label: t("nav.categories"), icon: Tag },
         { to: "/admin/orders", label: t("nav.orders"), icon: ShoppingCart },
         { to: "/admin/coupons", label: t("nav.coupons"), icon: Ticket },
         { to: "/admin/tax-rates", label: t("nav.taxRates"), icon: Receipt },
@@ -186,6 +189,9 @@ export function AdminLayout() {
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link to="/portal">{t("nav.portal")}</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/marketplace">{t("nav.marketplace")}</Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={logout} className="text-destructive">
@@ -306,6 +312,12 @@ export function PortalLayout() {
             {site_name}
           </Link>
           <div className="flex items-center gap-4">
+            <Link to="/marketplace">
+              <Button variant="ghost" size="sm" className="gap-2">
+                <Store className="h-4 w-4" />
+                {t("nav.marketplace")}
+              </Button>
+            </Link>
             {user.is_admin && (
               <Link to="/admin">
                 <Button variant="outline" size="sm">
@@ -357,6 +369,57 @@ export function PortalLayout() {
         </div>
       </header>
       <main className="max-w-5xl mx-auto p-4 md:p-8">
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
+      </main>
+      {/* Attribution required by AGPL v3 Section 7(b) — see NOTICE */}
+      <footer className="border-t py-3 text-center">
+        <a
+          href={attribution_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+        >
+          {attribution_text}
+        </a>
+      </footer>
+    </div>
+  )
+}
+
+// PublicLayout — the anonymous storefront shell the marketplace
+// pages render inside. No auth gate: anyone may browse the catalog.
+// The header carries the top-level public nav (Marketplace) and a
+// Sign in link; the footer carries the AGPL attribution every surface
+// must show (see NOTICE).
+export function PublicLayout() {
+  const { site_name, logo_url, attribution_text, attribution_url } = useSiteConfig()
+  const { t } = useI18n()
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
+      <header className="border-b bg-card">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+          <Link to="/marketplace" className="flex items-center gap-2 text-lg font-bold tracking-tight">
+            <img src={logo_url || "/logo.svg"} alt="" className="h-6 w-6" />
+            {site_name}
+          </Link>
+          <nav className="flex items-center gap-1">
+            <Link to="/marketplace">
+              <div className="flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-medium text-foreground">
+                <Store className="h-4 w-4" />
+                {t("nav.marketplace")}
+              </div>
+            </Link>
+            <Link to="/login">
+              <Button variant="outline" size="sm">
+                {t("marketplace.signIn")}
+              </Button>
+            </Link>
+          </nav>
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-6xl flex-1 p-4 md:p-8">
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>
