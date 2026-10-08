@@ -1191,6 +1191,16 @@ func main() {
 		portal.POST("/api-keys", apiKeyPortalH.Create)
 		portal.GET("/api-keys/:id", apiKeyPortalH.Get)
 		portal.DELETE("/api-keys/:id", apiKeyPortalH.Revoke)
+
+		// Customer self-service webhooks (plan SS35): endpoints the
+		// customer owns, signed with their own secret (returned once
+		// at creation). Ownership enforced in the handler (404s).
+		portalWebhookH := handler.NewPortalWebhookHandler(db)
+		portal.GET("/webhooks", portalWebhookH.List)
+		portal.POST("/webhooks", portalWebhookH.Create)
+		portal.PATCH("/webhooks/:id", portalWebhookH.Update)
+		portal.DELETE("/webhooks/:id", portalWebhookH.Delete)
+		portal.POST("/webhooks/:id/test", portalWebhookH.DispatchTest)
 	}
 
 	// Admin route layout: three groups under /admin, all sharing the
@@ -1323,6 +1333,17 @@ func main() {
 		admin.POST("/categories", categoryAdminH.Create)
 		admin.PATCH("/categories/:id", categoryAdminH.Update)
 		admin.DELETE("/categories/:id", categoryAdminH.Delete)
+
+		// Reseller foundation (Phase 7): accounts + licence allocation.
+		resellerAdminH := handler.NewResellerAdminHandler(db)
+		admin.GET("/resellers", resellerAdminH.List)
+		admin.POST("/resellers", resellerAdminH.Create)
+		admin.GET("/resellers/:id", resellerAdminH.Get)
+		admin.PATCH("/resellers/:id", resellerAdminH.Update)
+		admin.DELETE("/resellers/:id", resellerAdminH.Delete)
+		admin.GET("/resellers/:id/licenses", resellerAdminH.ListLicenses)
+		admin.POST("/resellers/:id/licenses", resellerAdminH.AllocateLicense)
+		admin.DELETE("/resellers/:id/licenses/:license_id", resellerAdminH.DeallocateLicense)
 
 		admin.GET("/settings", adminH.GetSettings)
 		admin.PUT("/settings", adminH.UpdateSettings)

@@ -33,9 +33,15 @@ import MarketplacePage from "@/pages/marketplace"
 import MarketplaceProductPage from "@/pages/marketplace-product"
 import PortalAccountPage from "@/pages/portal/account"
 import PortalAPIKeysPage from "@/pages/portal/api-keys"
+import PortalDashboardPage from "@/pages/portal/dashboard"
+import PortalDevicesPage from "@/pages/portal/devices"
 import PortalDownloadsPage from "@/pages/portal/downloads"
 import PortalLicensesPage from "@/pages/portal/licenses"
 import PortalOrdersPage from "@/pages/portal/orders"
+import PortalSubscriptionsPage from "@/pages/portal/subscriptions"
+import PortalSupportPage from "@/pages/portal/support"
+import PortalUsagePage from "@/pages/portal/usage"
+import PortalWebhooksPage from "@/pages/portal/webhooks"
 import SetupPage from "@/pages/setup"
 import "./index.css"
 
@@ -96,10 +102,16 @@ createRoot(document.getElementById("root")!).render(
 
                     {/* Portal */}
                     <Route path="/portal" element={<PortalLayout />}>
-                      <Route index element={<PortalLicensesPage />} />
+                      <Route index element={<PortalDashboardPage />} />
+                      <Route path="licenses" element={<PortalLicensesPage />} />
+                      <Route path="subscriptions" element={<PortalSubscriptionsPage />} />
+                      <Route path="devices" element={<PortalDevicesPage />} />
+                      <Route path="usage" element={<PortalUsagePage />} />
                       <Route path="orders" element={<PortalOrdersPage />} />
                       <Route path="downloads" element={<PortalDownloadsPage />} />
                       <Route path="api-keys" element={<PortalAPIKeysPage />} />
+                      <Route path="webhooks" element={<PortalWebhooksPage />} />
+                      <Route path="support" element={<PortalSupportPage />} />
                       <Route path="account" element={<PortalAccountPage />} />
                     </Route>
 

@@ -823,21 +823,31 @@ type MeteredBilling struct {
 	CreatedAt time.Time `bun:",nullzero,default:now()" json:"created_at"`
 }
 
-// Webhook event constants
+// Webhook event constants — the complete vocabulary the platform
+// dispatches. Several call sites still pass these names as string
+// literals (admin.go, expiry.go, stripe.go, license.go); the constants
+// pin the spelling and feed the subscription vocabulary in
+// customer_webhook.go.
 const (
-	EventLicenseCreated    = "license.created"
-	EventLicenseCanceled   = "license.canceled"
-	EventLicenseSuspended  = "license.suspended"
-	EventLicenseReinstated = "license.reinstated"
-	EventLicenseRevoked    = "license.revoked"
-	EventQuotaWarning      = "quota.warning"
-	EventQuotaExceeded     = "quota.exceeded"
-	EventSeatAdded         = "seat.added"
-	EventSeatRemoved       = "seat.removed"
-	EventPlanChanged       = "plan.changed"
-	EventReleasePublished  = "release.published"
-	EventReleaseYanked     = "release.yanked"
-	EventReleaseUnyanked   = "release.unyanked"
+	EventLicenseCreated          = "license.created"
+	EventLicenseActivated        = "license.activated"
+	EventLicenseDeactivated      = "license.deactivated"
+	EventLicenseExpiryChanged    = "license.expiry_changed"
+	EventLicenseExpired          = "license.expired"
+	EventLicenseCanceled         = "license.canceled"
+	EventLicenseSuspended        = "license.suspended"
+	EventLicenseReinstated       = "license.reinstated"
+	EventLicenseRevoked          = "license.revoked"
+	EventLicensePaymentFailed    = "license.payment_failed"
+	EventLicensePaymentRecovered = "license.payment_recovered"
+	EventQuotaWarning            = "quota.warning"
+	EventQuotaExceeded           = "quota.exceeded"
+	EventSeatAdded               = "seat.added"
+	EventSeatRemoved             = "seat.removed"
+	EventPlanChanged             = "plan.changed"
+	EventReleasePublished        = "release.published"
+	EventReleaseYanked           = "release.yanked"
+	EventReleaseUnyanked         = "release.unyanked"
 )
 
 // ─── Release (logical release event) ───

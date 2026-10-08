@@ -1221,6 +1221,90 @@ const en = {
   "toast.categoryCreated": "Category created.",
   "toast.categorySaved": "Category updated.",
   "toast.categoryDeleted": "Category deleted.",
+
+  // ─── Portal: dashboard, subscriptions, devices, usage, webhooks, support ───
+  "nav.subscriptions": "Subscriptions",
+  "nav.devices": "Devices",
+  "nav.usage": "Usage",
+  "nav.support": "Support",
+  "status.uncollectible": "Uncollectible",
+
+  // Portal dashboard
+  "portal.dashWelcome": "Welcome back, {name}",
+  "portal.dashSubtitle": "Here's an overview of your licenses and account.",
+  "portal.dashActiveLicenses": "Active Licenses",
+  "portal.dashActiveSubscriptions": "Active Subscriptions",
+  "portal.dashRecentOrders": "Recent Orders",
+  "portal.dashUsageSnapshot": "Usage & Quotas",
+  "portal.dashViewAll": "View all",
+  "portal.dashNoUsage": "No usage-metered features on your plans yet.",
+  "portal.dashNoOrders": "No orders yet.",
+  "portal.dashQuickLinks": "Quick Links",
+
+  // Portal usage
+  "portal.usageTitle": "Usage & Quotas",
+  "portal.usageDesc": "Track consumption of metered features across your licenses.",
+  "portal.usageEmpty": "No usage-metered features",
+  "portal.usageEmptyDesc": "Plans with quota-based features will show usage here.",
+  "portal.usageUsedOf": "{used} / {limit}",
+  "portal.usageUnlimited": "Unlimited",
+  "portal.usagePer": "{unit} per {period}",
+
+  // Portal subscriptions
+  "portal.subsTitle": "Subscriptions & Billing",
+  "portal.subsDesc": "Manage your subscriptions, payment methods, and update renewals.",
+  "portal.subsEmpty": "Nothing to manage yet",
+  "portal.subsEmptyDesc": "Subscriptions and perpetual maintenance plans appear here.",
+  "portal.subsSubscription": "Subscription",
+  "portal.subsPerpetual": "Perpetual",
+  "portal.subsBillingInterval": "Billing",
+  "portal.subsCurrentPeriodEnd": "Current period ends",
+
+  // Portal devices
+  "portal.devicesTitle": "Devices & Activations",
+  "portal.devicesDesc": "Manage activated devices and team seats across your licenses.",
+  "portal.devicesEmpty": "No licenses to show devices for.",
+
+  // Portal webhooks
+  "portal.whTitle": "Webhooks",
+  "portal.whDesc": "Receive HTTP notifications when events happen on your account.",
+  "portal.whNew": "New Webhook",
+  "portal.whCreateDesc": "We'll POST a JSON payload to your endpoint when these events occur.",
+  "portal.whUrl": "Endpoint URL",
+  "portal.whUrlPlaceholder": "https://example.com/webhook",
+  "portal.whEvents": "Events",
+  "portal.whActive": "Active",
+  "portal.whSecretPrefix": "Secret",
+  "portal.whLastDelivery": "Last delivery",
+  "portal.whEmpty": "No webhooks yet.",
+  "portal.whTest": "Send test",
+  "portal.whTestSent": "Test event dispatched.",
+  "portal.whUpdated": "Webhook updated.",
+  "portal.whDeleted": "Webhook deleted.",
+  "portal.whDeleteTitle": "Delete this webhook?",
+  "portal.whDeleteDesc": "This endpoint will stop receiving events. This cannot be undone.",
+  "portal.whCreated": "Webhook created.",
+  "portal.whEventsRequired": "Select at least one event.",
+  "portal.whSecretTitle": "Copy your webhook secret now",
+  "portal.whSecretDesc": "Use this secret to verify the signature on incoming webhooks. It is shown only once.",
+  "portal.whSecretCopy": "Copy secret",
+  "portal.whSecretCopied": "Copied!",
+  "portal.whSecretWarn": "This secret cannot be shown again. Store it somewhere safe.",
+
+  // Portal support
+  "portal.supportTitle": "Support",
+  "portal.supportDesc": "Get help with your licenses, orders, and account.",
+  "portal.supportContactTitle": "Contact us",
+  "portal.supportContactDesc": "Questions about your account? Reach out to {vendor} and we'll get back to you.",
+  "portal.supportResponseNote": "We usually reply within one business day.",
+  "portal.supportFaqTitle": "Frequently asked questions",
+  "portal.supportFaq1Q": "How do I activate my license?",
+  "portal.supportFaq1A":
+    "Download the product, then enter your license key when prompted. Each key supports a limited number of device activations.",
+  "portal.supportFaq2Q": "How do I manage my devices or team?",
+  "portal.supportFaq2A": "Open Devices to deactivate a device or invite a teammate to a seat on your plan.",
+  "portal.supportFaq3Q": "Where can I see my invoices?",
+  "portal.supportFaq3A": "Every invoice is listed under Orders and, for subscriptions, under Subscriptions & Billing.",
 } as const
 
 export default en

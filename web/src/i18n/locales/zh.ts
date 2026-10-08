@@ -1187,6 +1187,89 @@ const zh = {
   "toast.categoryCreated": "分类已创建。",
   "toast.categorySaved": "分类已更新。",
   "toast.categoryDeleted": "分类已删除。",
+
+  // ─── Portal: dashboard, subscriptions, devices, usage, webhooks, support ───
+  "nav.subscriptions": "订阅",
+  "nav.devices": "设备",
+  "nav.usage": "用量",
+  "nav.support": "支持",
+  "status.uncollectible": "无法收回",
+
+  // Portal dashboard
+  "portal.dashWelcome": "欢迎回来，{name}",
+  "portal.dashSubtitle": "以下是你的许可证和账户概览。",
+  "portal.dashActiveLicenses": "有效许可证",
+  "portal.dashActiveSubscriptions": "有效订阅",
+  "portal.dashRecentOrders": "最近订单",
+  "portal.dashUsageSnapshot": "用量与配额",
+  "portal.dashViewAll": "查看全部",
+  "portal.dashNoUsage": "你的方案尚无计量功能。",
+  "portal.dashNoOrders": "暂无订单。",
+  "portal.dashQuickLinks": "快捷入口",
+
+  // Portal usage
+  "portal.usageTitle": "用量与配额",
+  "portal.usageDesc": "跟踪各许可证计量功能的使用情况。",
+  "portal.usageEmpty": "暂无计量功能",
+  "portal.usageEmptyDesc": "含配额功能的方案将在此显示用量。",
+  "portal.usageUsedOf": "{used} / {limit}",
+  "portal.usageUnlimited": "无限制",
+  "portal.usagePer": "每{period} {unit}",
+
+  // Portal subscriptions
+  "portal.subsTitle": "订阅与账单",
+  "portal.subsDesc": "管理你的订阅、付款方式和更新续期。",
+  "portal.subsEmpty": "暂无需要管理的项目",
+  "portal.subsEmptyDesc": "订阅和永久维护计划将显示在此处。",
+  "portal.subsSubscription": "订阅",
+  "portal.subsPerpetual": "永久",
+  "portal.subsBillingInterval": "计费周期",
+  "portal.subsCurrentPeriodEnd": "当前周期结束",
+
+  // Portal devices
+  "portal.devicesTitle": "设备与激活",
+  "portal.devicesDesc": "管理各许可证下已激活的设备和团队席位。",
+  "portal.devicesEmpty": "暂无可显示设备的许可证。",
+
+  // Portal webhooks
+  "portal.whTitle": "Webhooks",
+  "portal.whDesc": "当账户发生事件时接收 HTTP 通知。",
+  "portal.whNew": "新建 Webhook",
+  "portal.whCreateDesc": "当这些事件发生时，我们会向你的端点 POST JSON 数据。",
+  "portal.whUrl": "端点 URL",
+  "portal.whUrlPlaceholder": "https://example.com/webhook",
+  "portal.whEvents": "事件",
+  "portal.whActive": "启用",
+  "portal.whSecretPrefix": "密钥",
+  "portal.whLastDelivery": "最近投递",
+  "portal.whEmpty": "暂无 Webhook。",
+  "portal.whTest": "发送测试",
+  "portal.whTestSent": "已发送测试事件。",
+  "portal.whUpdated": "Webhook 已更新。",
+  "portal.whDeleted": "Webhook 已删除。",
+  "portal.whDeleteTitle": "删除此 Webhook？",
+  "portal.whDeleteDesc": "该端点将不再接收事件，此操作无法撤销。",
+  "portal.whCreated": "Webhook 已创建。",
+  "portal.whEventsRequired": "请至少选择一个事件。",
+  "portal.whSecretTitle": "立即复制你的 Webhook 密钥",
+  "portal.whSecretDesc": "用此密钥校验传入 Webhook 的签名。它仅显示一次。",
+  "portal.whSecretCopy": "复制密钥",
+  "portal.whSecretCopied": "已复制！",
+  "portal.whSecretWarn": "此密钥无法再次显示，请妥善保存。",
+
+  // Portal support
+  "portal.supportTitle": "支持",
+  "portal.supportDesc": "获取有关许可证、订单和账户的帮助。",
+  "portal.supportContactTitle": "联系我们",
+  "portal.supportContactDesc": "对账户有疑问？联系 {vendor}，我们会尽快回复。",
+  "portal.supportResponseNote": "我们通常在一个工作日内回复。",
+  "portal.supportFaqTitle": "常见问题",
+  "portal.supportFaq1Q": "如何激活我的许可证？",
+  "portal.supportFaq1A": "下载产品，然后在提示时输入许可证密钥。每个密钥支持有限数量的设备激活。",
+  "portal.supportFaq2Q": "如何管理设备或团队？",
+  "portal.supportFaq2A": "打开“设备”即可停用设备，或邀请队友加入方案的席位。",
+  "portal.supportFaq3Q": "在哪里查看发票？",
+  "portal.supportFaq3A": "所有发票都在“订单”下，订阅的发票也在“订阅与账单”下。",
 } as const
 
 export default zh

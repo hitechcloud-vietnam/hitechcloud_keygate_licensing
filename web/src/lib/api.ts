@@ -124,7 +124,6 @@ function post<T>(path: string, body?: unknown) {
 function put<T>(path: string, body?: unknown) {
   return request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined })
 }
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function patch<T>(path: string, body?: unknown) {
   return request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined })
 }
@@ -274,6 +273,18 @@ export const portal = {
   createPortalAPIKey: (data: { name: string; scopes?: string; expires_at?: string }) =>
     post<{ api_key: CustomerAPIKey; secret: string; note: string }>("/portal/api-keys", data),
   revokePortalAPIKey: (id: string) => del<CustomerAPIKey>(`/portal/api-keys/${id}`),
+
+  // ─── Portal webhooks (account-scoped) ───
+  // The customer's own notification endpoints. Secret is returned only
+  // on create. The event vocabulary is WEBHOOK_EVENTS (lib/webhook-events).
+  listPortalWebhooks: (params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ webhooks: PortalWebhook[] }>>(`/portal/webhooks?${listQuery(params)}`),
+  createPortalWebhook: (data: { url: string; events: string[]; active?: boolean }) =>
+    post<{ webhook: PortalWebhook; secret: string }>("/portal/webhooks", data),
+  updatePortalWebhook: (id: string, data: { url?: string; events?: string[]; active?: boolean }) =>
+    patch<PortalWebhook>(`/portal/webhooks/${encodeURIComponent(id)}`, data),
+  deletePortalWebhook: (id: string) => del<void>(`/portal/webhooks/${encodeURIComponent(id)}`),
+  testPortalWebhook: (id: string) => post<{ status?: string }>(`/portal/webhooks/${encodeURIComponent(id)}/test`),
 }
 
 // ─── Admin ───
@@ -894,6 +905,21 @@ export interface WebhookConfig {
   created_at: string
   updated_at: string
   product?: Product
+}
+
+// PortalWebhook is the customer's own webhook endpoint (account-scoped,
+// not per-product like the admin WebhookConfig). The plaintext secret is
+// returned exactly once on creation; after that only secret_prefix is
+// ever seen.
+export interface PortalWebhook {
+  id: string
+  url: string
+  events: string[]
+  active: boolean
+  secret_prefix: string
+  last_delivery_at?: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface WebhookDeliveryLog {

@@ -2,14 +2,18 @@ import {
   BarChart3,
   Blocks,
   ChevronDown,
+  CreditCard,
   Download,
   FileKey2,
+  Gauge,
   Key,
   Layers,
   LayoutDashboard,
+  LifeBuoy,
   Link2,
   LogOut,
   Menu,
+  MonitorSmartphone,
   Package,
   Receipt,
   Rocket,
@@ -290,10 +294,16 @@ export function PortalLayout() {
   const { t } = useI18n()
 
   const portalNav = [
-    { to: "/portal", label: t("nav.licenses"), icon: Key },
+    { to: "/portal", label: t("nav.dashboard"), icon: LayoutDashboard },
+    { to: "/portal/licenses", label: t("nav.licenses"), icon: Key },
+    { to: "/portal/subscriptions", label: t("nav.subscriptions"), icon: CreditCard },
+    { to: "/portal/devices", label: t("nav.devices"), icon: MonitorSmartphone },
+    { to: "/portal/usage", label: t("nav.usage"), icon: Gauge },
     { to: "/portal/orders", label: t("nav.orders"), icon: ShoppingCart },
     { to: "/portal/downloads", label: t("nav.downloads"), icon: Download },
     { to: "/portal/api-keys", label: t("nav.apiKeys"), icon: FileKey2 },
+    { to: "/portal/webhooks", label: t("nav.webhooks"), icon: Link2 },
+    { to: "/portal/support", label: t("nav.support"), icon: LifeBuoy },
     { to: "/portal/account", label: t("nav.settings"), icon: User },
   ]
   const location = useLocation()
@@ -343,9 +353,11 @@ export function PortalLayout() {
             </DropdownMenu>
           </div>
         </div>
-        {/* Portal navigation */}
+        {/* Portal navigation. The sections scroll sideways on a narrow
+          screen rather than wrapping onto many rows: this is a tab bar,
+          and a wrapping one buries the page content below the fold. */}
         <div className="max-w-5xl mx-auto px-4">
-          <nav className="flex gap-1 -mb-px">
+          <nav className="flex gap-1 -mb-px overflow-x-auto">
             {portalNav.map((item) => {
               const active =
                 item.to === "/portal" ? location.pathname === "/portal" : location.pathname.startsWith(item.to)
