@@ -35,6 +35,12 @@ var (
 	// that makes an allocation meaningful.
 	ErrResellerHasAllocations = errors.New("reseller has allocated licenses")
 
+	// ErrResellerHasCommissions is DeleteReseller's second refusal: a
+	// reseller with commission ledger rows is financial history and must
+	// be kept (settle or cancel the rows first, then delete). The
+	// migration's ON DELETE RESTRICT on commissions is the backstop.
+	ErrResellerHasCommissions = errors.New("reseller has commission records")
+
 	// ErrAllocationLicenseNotFound is AllocateLicense refusing a
 	// licence_id that names no licence. The caller sent an id we cannot
 	// allocate; that is a bad request, not a missing reseller.
@@ -144,11 +150,13 @@ func (s *Store) UpdateReseller(ctx context.Context, r *model.Reseller) error {
 }
 
 // DeleteReseller removes the account — but only while it owns no
-// licences. The allocations are commercial records the commission
-// slice will read, so this refuses with ErrResellerHasAllocations
-// rather than silently dropping them (the documented choice over
-// cascading; see model.ResellerLicense). The migration backs the check
-// with ON DELETE RESTRICT, so a bypassed check still cannot orphan the
+// licences and no commission ledger rows. The allocations are
+// commercial records the commission slice reads, and the commission
+// rows are financial history, so this refuses with
+// ErrResellerHasAllocations / ErrResellerHasCommissions rather than
+// silently dropping them (the documented choice over cascading; see
+// model.ResellerLicense). The migration backs both checks with
+// ON DELETE RESTRICT, so a bypassed check still cannot orphan the
 // records.
 //
 // A no-op delete answers sql.ErrNoRows so the caller can say 404 for a
@@ -161,6 +169,13 @@ func (s *Store) DeleteReseller(ctx context.Context, id string) error {
 	}
 	if n > 0 {
 		return ErrResellerHasAllocations
+	}
+	cn, err := s.CountResellerCommissions(ctx, id)
+	if err != nil {
+		return err
+	}
+	if cn > 0 {
+		return ErrResellerHasCommissions
 	}
 	res, err := s.DB.NewDelete().Model((*model.Reseller)(nil)).
 		Where("id = ?", id).Exec(ctx)
@@ -178,6 +193,13 @@ func (s *Store) DeleteReseller(ctx context.Context, id string) error {
 // uses it as the guard above.
 func (s *Store) CountResellerLicenses(ctx context.Context, resellerID string) (int, error) {
 	return s.DB.NewSelect().Model((*model.ResellerLicense)(nil)).
+		Where("reseller_id = ?", resellerID).Count(ctx)
+}
+
+// CountResellerCommissions is how many commission ledger rows name a
+// reseller. DeleteReseller uses it as the ledger guard above.
+func (s *Store) CountResellerCommissions(ctx context.Context, resellerID string) (int, error) {
+	return s.DB.NewSelect().Model((*model.Commission)(nil)).
 		Where("reseller_id = ?", resellerID).Count(ctx)
 }
 

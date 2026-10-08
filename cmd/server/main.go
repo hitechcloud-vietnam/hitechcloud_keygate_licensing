@@ -923,6 +923,19 @@ func main() {
 	// Unified checkout: GET /pay/:checkout_id → Stripe
 	r.GET("/pay/:checkout_id", stripeH.CheckoutByPlan)
 
+	// Affiliate attribution (Phase 7): /r/<code> records the click
+	// (hashed IP only) and redirects to the code's stored landing page
+	// — never an open redirect — while a first-party cookie carries the
+	// attribution to checkout, which posts the conversion here.
+	affiliatePublicH := handler.NewAffiliatePublicHandler(db)
+	affiliatePublicH.IPSalt = cfg.ReferralHashSalt
+	r.GET("/r/:code",
+		middleware.RateLimitByIPScoped("affiliate_redirect", 60, time.Minute),
+		affiliatePublicH.Redirect)
+	v1.POST("/affiliates/convert",
+		middleware.RateLimitByIPScoped("affiliate_convert", 30, time.Minute),
+		affiliatePublicH.Convert)
+
 	portal := v1.Group("/portal", middleware.SessionAuth(cfg.JWTSecret, db.FindUserIsAdmin))
 	{
 		portal.GET("/me", authH.Me)
@@ -1201,6 +1214,15 @@ func main() {
 		portal.PATCH("/webhooks/:id", portalWebhookH.Update)
 		portal.DELETE("/webhooks/:id", portalWebhookH.Delete)
 		portal.POST("/webhooks/:id/test", portalWebhookH.DispatchTest)
+
+		// Reseller self-service (Phase 7): a portal session whose email
+		// matches a reseller's contact_email IS that reseller; anyone
+		// else gets 404 (no partner-existence oracle).
+		portalResellerH := handler.NewPortalResellerHandler(db)
+		portal.GET("/reseller/me", portalResellerH.Me)
+		portal.GET("/reseller/licenses", portalResellerH.ListLicenses)
+		portal.GET("/reseller/commissions", portalResellerH.ListCommissions)
+		portal.GET("/reseller/prices", portalResellerH.ListPrices)
 	}
 
 	// Admin route layout: three groups under /admin, all sharing the
@@ -1323,6 +1345,11 @@ func main() {
 		admin.GET("/orders/:id", orderAdminH.Get)
 		admin.POST("/orders/:id/refund", orderAdminH.Refund)
 		admin.GET("/orders/:id/invoices", orderAdminH.ListInvoices)
+		// PO / invoice workflow (Phase 8 slice): billing block, guarded
+		// invoice state transitions (paid → void is refused; refund first).
+		admin.PATCH("/orders/:id/billing", orderAdminH.UpdateBilling)
+		admin.POST("/orders/:id/invoices/:invoice_id/void", orderAdminH.Void)
+		admin.POST("/orders/:id/invoices/:invoice_id/mark-uncollectible", orderAdminH.MarkUncollectible)
 		// Order price preview (no persistence). Registered outside /orders/:id
 		// because gin cannot mix a static segment with a param sibling.
 		admin.POST("/quotes", orderAdminH.Preview)
@@ -1344,6 +1371,34 @@ func main() {
 		admin.GET("/resellers/:id/licenses", resellerAdminH.ListLicenses)
 		admin.POST("/resellers/:id/licenses", resellerAdminH.AllocateLicense)
 		admin.DELETE("/resellers/:id/licenses/:license_id", resellerAdminH.DeallocateLicense)
+		// Reseller commissions + wholesale pricing (Phase 7 slice 2).
+		admin.GET("/resellers/:id/commissions", resellerAdminH.ListCommissions)
+		admin.POST("/resellers/:id/commissions", resellerAdminH.AccrueCommission)
+		admin.POST("/resellers/:id/commissions/:commission_id/paid", resellerAdminH.MarkCommissionPaid)
+		admin.GET("/resellers/:id/prices", resellerAdminH.ListPriceOverrides)
+		admin.PUT("/resellers/:id/prices/:plan_id", resellerAdminH.SetPriceOverride)
+		admin.DELETE("/resellers/:id/prices/:plan_id", resellerAdminH.DeletePriceOverride)
+
+		// Affiliate program (Phase 7): accounts, referral codes,
+		// conversion review, payouts.
+		affiliateAdminH := handler.NewAffiliateAdminHandler(db)
+		admin.GET("/affiliates", affiliateAdminH.List)
+		admin.POST("/affiliates", affiliateAdminH.Create)
+		admin.GET("/affiliates/:id", affiliateAdminH.Get)
+		admin.PATCH("/affiliates/:id", affiliateAdminH.Update)
+		admin.DELETE("/affiliates/:id", affiliateAdminH.Delete)
+		admin.GET("/affiliates/:id/codes", affiliateAdminH.ListCodes)
+		admin.POST("/affiliates/:id/codes", affiliateAdminH.CreateCode)
+		admin.PATCH("/affiliates/:id/codes/:code_id", affiliateAdminH.UpdateCode)
+		admin.DELETE("/affiliates/:id/codes/:code_id", affiliateAdminH.DeleteCode)
+		admin.GET("/affiliates/:id/conversions", affiliateAdminH.ListConversions)
+		admin.GET("/affiliates/:id/payouts", affiliateAdminH.ListPayouts)
+		admin.POST("/affiliates/:id/payouts", affiliateAdminH.CreatePayout)
+		admin.POST("/conversions/:id/approve", affiliateAdminH.Approve)
+		admin.POST("/conversions/:id/reject", affiliateAdminH.Reject)
+		admin.POST("/conversions/:id/reverse", affiliateAdminH.Reverse)
+		admin.POST("/payouts/:id/paid", affiliateAdminH.MarkPaid)
+		admin.POST("/payouts/:id/failed", affiliateAdminH.MarkFailed)
 
 		admin.GET("/settings", adminH.GetSettings)
 		admin.PUT("/settings", adminH.UpdateSettings)

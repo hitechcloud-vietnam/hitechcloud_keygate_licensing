@@ -30,6 +30,59 @@ const (
 	InvoiceStatusVoid  = "void"
 )
 
+// Invoice status values added by the purchase-order / invoice
+// workflow. They extend — never replace — the four above: the strings
+// live in invoices.status, so existing rows keep scanning and the
+// database CHECK was widened (20261008_138000_po_workflow), not
+// rewritten.
+const (
+	// InvoiceStatusUncollectible is an issued (open) invoice the
+	// billing flow has given up collecting. Recovery is still
+	// possible: back to open when collection resumes, to paid when
+	// the debt settles late.
+	InvoiceStatusUncollectible = "uncollectible"
+	// InvoiceStatusRefunded is a paid invoice whose money went back
+	// to the customer. Terminal.
+	InvoiceStatusRefunded = "refunded"
+)
+
+// CanTransitionInvoice reports whether an invoice may move from
+// status from to status to. The machine, in full:
+//
+//	draft         -> open (issue)        | void (cancel before issue)
+//	open          -> paid (settle)       | void (cancel)
+//	              | uncollectible (give up collection)
+//	uncollectible -> open (resume)       | paid (settles late)
+//	paid          -> refunded (money returned)
+//	void, refunded are terminal.
+//
+// Two refusals are load-bearing for the API built on this:
+//
+//   - paid -> void is refused: money changed hands, so the only way
+//     off paid is the refund the order's Refund endpoint performs
+//     (paid -> refunded). Voiding a paid invoice would erase a real
+//     charge from the books.
+//   - paid -> uncollectible is refused: an invoice that was PAID is
+//     collected by definition.
+//
+// Self-transitions are refused too — re-running a transition should
+// surface, not silently succeed.
+func CanTransitionInvoice(from, to string) bool {
+	switch from {
+	case InvoiceStatusDraft:
+		return to == InvoiceStatusOpen || to == InvoiceStatusVoid
+	case InvoiceStatusOpen:
+		return to == InvoiceStatusPaid || to == InvoiceStatusVoid ||
+			to == InvoiceStatusUncollectible
+	case InvoiceStatusUncollectible:
+		return to == InvoiceStatusOpen || to == InvoiceStatusPaid
+	case InvoiceStatusPaid:
+		return to == InvoiceStatusRefunded
+	}
+	// void and refunded are terminal; anything unknown never moves.
+	return false
+}
+
 type Order struct {
 	bun.BaseModel `bun:"table:orders"`
 
@@ -71,6 +124,38 @@ type Order struct {
 	RefundedAt     *time.Time `json:"refunded_at,omitempty"`
 	CreatedAt      time.Time  `bun:",nullzero,default:now()" json:"created_at"`
 	UpdatedAt      time.Time  `bun:",nullzero,default:now()" json:"updated_at"`
+
+	// Billing block (purchase-order / invoice workflow): who the
+	// invoice is drawn for and the commercial references that travel
+	// with it. Nullable and additive — an order created before this
+	// block existed (or by a flow that never sets it, like the payment
+	// ledger) has every one of these NULL. An empty string is stored
+	// as NULL (bun nullzero) and omitted from JSON, so "no value" has
+	// exactly one representation in the database and on the wire.
+	//
+	// Values are validated and folded on write by the admin billing
+	// endpoint (PATCH /admin/orders/:id/billing), not here.
+	BillingName         string `bun:",nullzero" json:"billing_name,omitempty"`
+	BillingCompany      string `bun:",nullzero" json:"billing_company,omitempty"`
+	BillingAddressLine1 string `bun:",nullzero" json:"billing_address_line1,omitempty"`
+	BillingAddressLine2 string `bun:",nullzero" json:"billing_address_line2,omitempty"`
+	BillingCity         string `bun:",nullzero" json:"billing_city,omitempty"`
+	BillingRegion       string `bun:",nullzero" json:"billing_region,omitempty"`
+	BillingPostalCode   string `bun:",nullzero" json:"billing_postal_code,omitempty"`
+	// BillingCountry is an ISO 3166-1 alpha-2 code ("VN", "US"),
+	// folded to upper case on write.
+	BillingCountry string `bun:",nullzero" json:"billing_country,omitempty"`
+	// CustomerTaxID is the customer's VAT / tax identifier, validated
+	// loosely on write: 8–20 characters of letters, digits and
+	// dashes (the shape most VAT numbers share, without pretending to
+	// validate any country's scheme).
+	CustomerTaxID string `bun:",nullzero" json:"customer_tax_id,omitempty"`
+	// PONumber is the customer's purchase-order reference, quoted on
+	// the invoice so their AP can match it (max 64 chars).
+	PONumber string `bun:",nullzero" json:"po_number,omitempty"`
+	// BillingEmail is the invoicing contact when it differs from
+	// CustomerEmail.
+	BillingEmail string `bun:",nullzero" json:"billing_email,omitempty"`
 
 	Items []*OrderItem `bun:"rel:has-many,join:id=order_id" json:"items,omitempty"`
 }
@@ -124,4 +209,12 @@ type Invoice struct {
 	DueAt         *time.Time `json:"due_at,omitempty"`
 	PaidAt        *time.Time `json:"paid_at,omitempty"`
 	CreatedAt     time.Time  `bun:",nullzero,default:now()" json:"created_at"`
+
+	// VoidedAt and UncollectibleAt are stamped by the state
+	// transitions the PO/invoice workflow added (void,
+	// uncollectible). Nullable and additive: a row predating them
+	// scans fine with both nil. The transition they belong to is
+	// decided by CanTransitionInvoice.
+	VoidedAt        *time.Time `json:"voided_at,omitempty"`
+	UncollectibleAt *time.Time `json:"uncollectible_at,omitempty"`
 }

@@ -21,6 +21,12 @@ type Config struct {
 
 	JWTSecret         string
 	LicenseSigningKey string
+	// ReferralHashSalt salts affiliate click hashes (model.HashReferralIP)
+	// so a leaked ip_hash cannot be brute-forced back to an address. Set
+	// REFERRAL_HASH_SALT in production; empty degrades to unsalted hashes
+	// and is a development-only setting (documented in the README env
+	// table).
+	ReferralHashSalt string
 
 	StripeSecretKey     string
 	StripeWebhookSecret string
@@ -121,6 +127,7 @@ func Load() (*Config, error) {
 
 		JWTSecret:         os.Getenv("JWT_SECRET"),
 		LicenseSigningKey: os.Getenv("LICENSE_SIGNING_KEY"),
+		ReferralHashSalt:  os.Getenv("REFERRAL_HASH_SALT"),
 
 		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),

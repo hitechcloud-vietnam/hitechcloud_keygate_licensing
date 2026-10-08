@@ -1,6 +1,11 @@
 package handler
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -9,6 +14,7 @@ import (
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/service"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/store"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/tax"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/pkg/apperr"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/pkg/response"
 )
 
@@ -19,12 +25,33 @@ import (
 //	POST   /admin/orders/preview          Price an order without persisting
 //	POST   /admin/orders/:id/refund       Mark a paid order refunded
 //	GET    /admin/orders/:id/invoices     List the order's invoices
+//	PATCH  /admin/orders/:id/billing      Set the billing block + PO/tax id
+//	POST   /admin/orders/:id/invoices/:invoice_id/void
+//	POST   /admin/orders/:id/invoices/:invoice_id/mark-uncollectible
 //
 // Every amount in the request and the response is int64 minor units;
 // no endpoint of this handler ever speaks in floating point.
+
+// orderAdminStore is the slice of store.Store this handler needs. The
+// real constructor takes *store.Store; tests substitute a fake so the
+// refusal paths — invalid billing input, illegal invoice transitions —
+// run without a database.
+type orderAdminStore interface {
+	ListOrders(ctx context.Context, search, status string, p store.Page) ([]*model.Order, int, error)
+	FindOrderByID(ctx context.Context, id string) (*model.Order, error)
+	UpdateOrderStatus(ctx context.Context, id, status string, paidAt, refundedAt *time.Time) error
+	UpdateOrderBilling(ctx context.Context, id string, o *model.Order) error
+	ListInvoicesByOrder(ctx context.Context, orderID string) ([]*model.Invoice, error)
+	FindInvoiceByID(ctx context.Context, id string) (*model.Invoice, error)
+	UpdateInvoiceStatus(ctx context.Context, id, status string, voidedAt, uncollectibleAt *time.Time) error
+	Audit(ctx context.Context, log *model.AuditLog)
+}
+
+var _ orderAdminStore = (*store.Store)(nil)
+
 type OrderAdminHandler struct {
 	Svc   *service.OrderService
-	Store *store.Store
+	Store orderAdminStore
 }
 
 // NewOrderAdminHandler wires the handler. svc prices and persists
@@ -214,4 +241,245 @@ func (h *OrderAdminHandler) ListInvoices(c *gin.Context) {
 		return
 	}
 	listOK(c, "invoices", invoices, len(invoices), listPage(c))
+}
+
+// ─── Billing block (PO / invoice workflow) ───
+
+// billingPatch is the body of PATCH /admin/orders/:id/billing. Every
+// field is a pointer so the wire distinguishes three intents — the
+// convention the endpoint is documented by:
+//
+//	absent or null        → the field keeps its current value (merge,
+//	                        not replace: one PATCH can touch just
+//	                        po_number and leave the address alone)
+//	"" (or only spaces)   → the field is CLEARED: stored NULL and
+//	                        omitted from the response JSON
+//	"some value"          → the field is set, after validation and
+//	                        folding (country upper-cased, text trimmed)
+type billingPatch struct {
+	BillingName         *string `json:"billing_name"`
+	BillingCompany      *string `json:"billing_company"`
+	BillingAddressLine1 *string `json:"billing_address_line1"`
+	BillingAddressLine2 *string `json:"billing_address_line2"`
+	BillingCity         *string `json:"billing_city"`
+	BillingRegion       *string `json:"billing_region"`
+	BillingPostalCode   *string `json:"billing_postal_code"`
+	BillingCountry      *string `json:"billing_country"`
+	CustomerTaxID       *string `json:"customer_tax_id"`
+	PONumber            *string `json:"po_number"`
+	BillingEmail        *string `json:"billing_email"`
+}
+
+// Length caps for the free-text billing fields. The name/company/
+// address/city/region cap matches apperr.ValidateName's 200 — one
+// idea of "how long is a human name" across the codebase.
+const (
+	billingTextMax   = 200 // name, company, address lines, city, region
+	billingPostalMax = 32  // billing_postal_code
+	billingPOMax     = 64  // po_number
+)
+
+// taxIDShape is the loose VAT/tax-id shape: 8–20 characters of
+// letters, digits and dashes — what most VAT/GST/TIN schemes share —
+// without pretending to validate any country's checksum.
+var taxIDShape = regexp.MustCompile(`^[A-Za-z0-9-]{8,20}$`)
+
+// billingText merges one free-text billing field: absent keeps, trimmed
+// value replaces, whitespace-only clears. max is the length cap.
+func billingText(dst, v *string, max int, field string) error {
+	if v == nil {
+		return nil
+	}
+	s := strings.TrimSpace(*v)
+	if len(s) > max {
+		return fmt.Errorf("%s must be at most %d characters", field, max)
+	}
+	*dst = s
+	return nil
+}
+
+// applyBillingPatch merges the patch into the order and validates the
+// values it sets. It returns a plain error whose message is safe to
+// hand the caller — every one of them is a 400 the admin can fix.
+// Shapes: billing_country must be a 2-letter ISO 3166-1 alpha-2 code
+// (folded to upper case on write), customer_tax_id 8–20 alphanumerics
+// and dashes, billing_email a bare address of at most 254 characters,
+// po_number at most 64. All are optional; empty clears.
+func applyBillingPatch(o *model.Order, p *billingPatch) error {
+	if err := billingText(&o.BillingName, p.BillingName, billingTextMax, "billing_name"); err != nil {
+		return err
+	}
+	if err := billingText(&o.BillingCompany, p.BillingCompany, billingTextMax, "billing_company"); err != nil {
+		return err
+	}
+	if err := billingText(&o.BillingAddressLine1, p.BillingAddressLine1, billingTextMax, "billing_address_line1"); err != nil {
+		return err
+	}
+	if err := billingText(&o.BillingAddressLine2, p.BillingAddressLine2, billingTextMax, "billing_address_line2"); err != nil {
+		return err
+	}
+	if err := billingText(&o.BillingCity, p.BillingCity, billingTextMax, "billing_city"); err != nil {
+		return err
+	}
+	if err := billingText(&o.BillingRegion, p.BillingRegion, billingTextMax, "billing_region"); err != nil {
+		return err
+	}
+	if err := billingText(&o.BillingPostalCode, p.BillingPostalCode, billingPostalMax, "billing_postal_code"); err != nil {
+		return err
+	}
+	if p.BillingCountry != nil {
+		s := strings.ToUpper(strings.TrimSpace(*p.BillingCountry))
+		if s != "" && (len(s) != 2 || s[0] < 'A' || s[0] > 'Z' || s[1] < 'A' || s[1] > 'Z') {
+			return errors.New("billing_country must be a 2-letter ISO 3166-1 alpha-2 code (e.g. VN, US)")
+		}
+		o.BillingCountry = s
+	}
+	if p.CustomerTaxID != nil {
+		s := strings.TrimSpace(*p.CustomerTaxID)
+		if s != "" && !taxIDShape.MatchString(s) {
+			return errors.New("customer_tax_id must be 8 to 20 characters of letters, digits, and dashes")
+		}
+		o.CustomerTaxID = s
+	}
+	if err := billingText(&o.PONumber, p.PONumber, billingPOMax, "po_number"); err != nil {
+		return err
+	}
+	if p.BillingEmail != nil {
+		s := strings.TrimSpace(*p.BillingEmail)
+		if s != "" {
+			if err := apperr.ValidateEmail(s); err != nil {
+				return errors.New(err.Message)
+			}
+		}
+		o.BillingEmail = s
+	}
+	return nil
+}
+
+// UpdateBilling answers PATCH /admin/orders/:id/billing: it sets or
+// clears fields of the order's billing block — billing address,
+// customer tax id, purchase-order number and invoicing contact. See
+// billingPatch for the merge/clear convention. What is stored is
+// canonical whatever the admin typed (trimmed text, upper-case
+// country), and the response is the updated order so the caller sees
+// exactly what the ledger now holds.
+func (h *OrderAdminHandler) UpdateBilling(c *gin.Context) {
+	id := c.Param("id")
+	o, err := h.Store.FindOrderByID(c, id)
+	if err != nil {
+		response.NotFound(c, "order not found")
+		return
+	}
+	var p billingPatch
+	if err := c.ShouldBindJSON(&p); err != nil {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	if err := applyBillingPatch(o, &p); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if err := h.Store.UpdateOrderBilling(c, id, o); err != nil {
+		response.Internal(c, err)
+		return
+	}
+	h.Store.Audit(c, &model.AuditLog{
+		Entity: "order", EntityID: id, Action: "billing_updated",
+		ActorType: "admin", ActorID: adminID(c), IPAddress: c.ClientIP(),
+	})
+	updated, err := h.Store.FindOrderByID(c, id)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, updated)
+}
+
+// ─── Invoice state transitions (PO / invoice workflow) ───
+
+// adminInvoice resolves :invoice_id in the scope of :id — the invoice
+// must be drawn on the named order, or the answer is the same 404 as a
+// missing invoice, so these endpoints are never an existence oracle
+// for other orders' documents.
+func (h *OrderAdminHandler) adminInvoice(c *gin.Context) (*model.Invoice, bool) {
+	inv, err := h.Store.FindInvoiceByID(c, c.Param("invoice_id"))
+	if err != nil || inv.OrderID != c.Param("id") {
+		response.NotFound(c, "invoice not found")
+		return nil, false
+	}
+	return inv, true
+}
+
+// MarkUncollectible answers
+// POST /admin/orders/:id/invoices/:invoice_id/mark-uncollectible: the
+// open invoice is declared uncollectible — given up on, neither paid
+// nor cancelled — and uncollectible_at is stamped. Only an open
+// invoice can get there (model.CanTransitionInvoice); anything else,
+// a paid invoice included, is refused 409 INVOICE_TRANSITION_INVALID
+// rather than silently ignored. The state is recoverable: the invoice
+// can still move back to open or on to paid.
+func (h *OrderAdminHandler) MarkUncollectible(c *gin.Context) {
+	inv, ok := h.adminInvoice(c)
+	if !ok {
+		return
+	}
+	if !model.CanTransitionInvoice(inv.Status, model.InvoiceStatusUncollectible) {
+		response.Err(c, 409, "INVOICE_TRANSITION_INVALID",
+			"invoice cannot be marked uncollectible from status "+inv.Status)
+		return
+	}
+	now := time.Now()
+	if err := h.Store.UpdateInvoiceStatus(c, inv.ID, model.InvoiceStatusUncollectible, nil, &now); err != nil {
+		response.Internal(c, err)
+		return
+	}
+	h.Store.Audit(c, &model.AuditLog{
+		Entity: "invoice", EntityID: inv.ID, Action: "marked_uncollectible",
+		ActorType: "admin", ActorID: adminID(c), IPAddress: c.ClientIP(),
+	})
+	updated, err := h.Store.FindInvoiceByID(c, inv.ID)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, updated)
+}
+
+// Void answers POST /admin/orders/:id/invoices/:invoice_id/void: the
+// unpaid invoice is cancelled and voided_at is stamped. A PAID invoice
+// is refused with 409 INVOICE_NOT_VOIDABLE — money changed hands, so
+// the only way off paid is the refund
+// (POST /admin/orders/:id/refund, whose behavior is untouched), never
+// a void. Any other illegal transition is 409
+// INVOICE_TRANSITION_INVALID. Void is terminal.
+func (h *OrderAdminHandler) Void(c *gin.Context) {
+	inv, ok := h.adminInvoice(c)
+	if !ok {
+		return
+	}
+	if inv.Status == model.InvoiceStatusPaid {
+		response.Err(c, 409, "INVOICE_NOT_VOIDABLE",
+			"a paid invoice cannot be voided; refund the order first")
+		return
+	}
+	if !model.CanTransitionInvoice(inv.Status, model.InvoiceStatusVoid) {
+		response.Err(c, 409, "INVOICE_TRANSITION_INVALID",
+			"invoice cannot be voided from status "+inv.Status)
+		return
+	}
+	now := time.Now()
+	if err := h.Store.UpdateInvoiceStatus(c, inv.ID, model.InvoiceStatusVoid, &now, nil); err != nil {
+		response.Internal(c, err)
+		return
+	}
+	h.Store.Audit(c, &model.AuditLog{
+		Entity: "invoice", EntityID: inv.ID, Action: "voided",
+		ActorType: "admin", ActorID: adminID(c), IPAddress: c.ClientIP(),
+	})
+	updated, err := h.Store.FindInvoiceByID(c, inv.ID)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, updated)
 }

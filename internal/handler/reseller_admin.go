@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -31,6 +33,19 @@ import (
 //	GET    /admin/resellers/:id/licenses        List allocated licences (paging)
 //	DELETE /admin/resellers/:id/licenses/:license_id   Deallocate one licence
 //
+// Slice 2 (commission ledger + wholesale pricing):
+//
+//	GET    /admin/resellers/:id/commissions     List the ledger (status, paging)
+//	POST   /admin/resellers/:id/commissions     Accrue {order_id, basis_minor, bps?}
+//	POST   /admin/resellers/:id/commissions/:commission_id/paid   Mark paid
+//	GET    /admin/resellers/:id/prices          List wholesale price overrides
+//	PUT    /admin/resellers/:id/prices/:plan_id Set one {unit_amount_minor, currency}
+//	DELETE /admin/resellers/:id/prices/:plan_id Delete one
+//
+// Money is int64 minor units and rates are integer basis points —
+// never float. The accrual is idempotent per (reseller, order): a
+// retry answers the original row, never a second payout.
+//
 // resellerAdminStore is the slice of store.Store this handler needs.
 // The real constructor takes *store.Store; tests substitute a fake so
 // the refusal paths — duplicate email, double allocation, delete with
@@ -45,6 +60,19 @@ type resellerAdminStore interface {
 	AllocateLicense(ctx context.Context, resellerID, licenseID string) error
 	DeallocateLicense(ctx context.Context, licenseID string) error
 	ListResellerLicenses(ctx context.Context, resellerID string, p store.Page) ([]*model.License, int, error)
+
+	// Commission ledger (slice 2).
+	AccrueCommission(ctx context.Context, cm *model.Commission) (*model.Commission, bool, error)
+	FindCommissionByID(ctx context.Context, id string) (*model.Commission, error)
+	ListCommissions(ctx context.Context, resellerID, status string, p store.Page) ([]*model.Commission, int, error)
+	MarkCommissionPaid(ctx context.Context, id string, paidAt time.Time) (*model.Commission, error)
+
+	// Wholesale price overrides (slice 2).
+	FindResellerPriceOverride(ctx context.Context, resellerID, planID string) (*model.ResellerPriceOverride, error)
+	ListResellerPriceOverrides(ctx context.Context, resellerID string) ([]*model.ResellerPriceOverride, error)
+	SetResellerPriceOverride(ctx context.Context, o *model.ResellerPriceOverride) error
+	DeleteResellerPriceOverride(ctx context.Context, resellerID, planID string) error
+
 	Audit(ctx context.Context, log *model.AuditLog)
 }
 
@@ -275,6 +303,10 @@ func (h *ResellerAdminHandler) Delete(c *gin.Context) {
 			response.Err(c, 409, "RESSELLER_HAS_ALLOCATIONS", "reseller still owns licenses; deallocate them before deleting")
 			return
 		}
+		if errors.Is(err, store.ErrResellerHasCommissions) {
+			response.Err(c, 409, "RESSELLER_HAS_COMMISSIONS", "reseller still has commission records; settle or cancel them before deleting")
+			return
+		}
 		response.Internal(c, err)
 		return
 	}
@@ -374,6 +406,322 @@ func (h *ResellerAdminHandler) DeallocateLicense(c *gin.Context) {
 	h.store.Audit(c, &model.AuditLog{
 		Entity: "reseller_license", EntityID: licenseID, Action: "deallocated",
 		ActorType: "admin", ActorID: adminID(c),
+	})
+	response.NoContent(c)
+}
+
+// ─── Commission ledger ───
+//
+// The record of what a partner earned per sale. Every row is
+// self-contained (basis, rate and the exact amount are snapshotted at
+// accrual), and the accrual is idempotent per (reseller, order) — a
+// retried POST answers the original row, never a second payout.
+// Money is int64 minor units, rates are integer basis points.
+
+// ListCommissions — GET /admin/resellers/:id/commissions
+//
+// Query: status (accrued|approved|paid|cancelled), limit/offset. The
+// reseller is checked first so a missing account is a 404 rather than
+// an empty page that reads like "earned nothing"; an unrecognised
+// status filter is refused rather than silently returning nothing.
+func (h *ResellerAdminHandler) ListCommissions(c *gin.Context) {
+	resellerID := c.Param("id")
+	if _, err := h.store.FindResellerByID(c, resellerID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeAppErr(c, apperr.NotFound("RESELLER", resellerID))
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+	status := c.Query("status")
+	if status != "" && !model.ValidCommissionStatus(status) {
+		response.BadRequest(c, "status must be one of: "+strings.Join(model.CommissionStatuses, ", "))
+		return
+	}
+	page := listPage(c)
+	rows, total, err := h.store.ListCommissions(c, resellerID, status, page)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	listOK(c, "commissions", rows, total, page)
+}
+
+// AccrueCommission — POST /admin/resellers/:id/commissions
+//
+// Body: { order_id (required), basis_minor (required, >= 0),
+// bps? (0..10000, defaults to the reseller's contract rate) }. The
+// order amount is the admin's assertion of what the sale was worth and
+// the rate is the contractual share; the store computes the exact
+// amount (rounding down) so the ledger never trusts its writer on the
+// money.
+//
+// Idempotent per (reseller, order): the first accrual answers 201 with
+// the row it created, a repeat answers 200 with the ORIGINAL row and
+// writes nothing — the retried webhook or double-clicked button can
+// never double-pay. Corrections are a future edit path; the first
+// writer wins.
+func (h *ResellerAdminHandler) AccrueCommission(c *gin.Context) {
+	resellerID := c.Param("id")
+	r, err := h.store.FindResellerByID(c, resellerID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeAppErr(c, apperr.NotFound("RESELLER", resellerID))
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+
+	var req struct {
+		OrderID    string `json:"order_id"`
+		BasisMinor *int64 `json:"basis_minor"`
+		BPS        *int   `json:"bps"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	orderID := strings.TrimSpace(req.OrderID)
+	if orderID == "" {
+		response.BadRequest(c, "order_id is required")
+		return
+	}
+	if req.BasisMinor == nil {
+		response.BadRequest(c, "basis_minor is required")
+		return
+	}
+	if *req.BasisMinor < 0 {
+		response.BadRequest(c, "basis_minor must be >= 0")
+		return
+	}
+	// bps defaults to the reseller's contract rate when the body leaves
+	// it out; a stated rate is bounded to a real percentage. Integer
+	// basis points only — money discipline.
+	bps := r.CommissionBPS
+	if req.BPS != nil {
+		if !model.ValidCommissionBPS(*req.BPS) {
+			response.BadRequest(c, "bps must be between 0 and 10000")
+			return
+		}
+		bps = *req.BPS
+	}
+
+	row, created, err := h.store.AccrueCommission(c, &model.Commission{
+		ResellerID: resellerID,
+		OrderID:    orderID,
+		BasisMinor: *req.BasisMinor,
+		BPS:        bps,
+	})
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	if !created {
+		// A replay is not a new event: the ledger did not change, so
+		// there is nothing to audit. Answer the original row.
+		response.OK(c, row)
+		return
+	}
+	h.store.Audit(c, &model.AuditLog{
+		Entity: "commission", EntityID: row.ID, Action: "accrued",
+		ActorType: "admin", ActorID: adminID(c),
+	})
+	response.Created(c, row)
+}
+
+// MarkCommissionPaid — POST /admin/resellers/:id/commissions/:commission_id/paid
+//
+// Body (optional): { paid_at? } — the disbursement date (RFC 3339,
+// backdating a payout run is legitimate); absent means now. The
+// commission must belong to the :id reseller: a commission under
+// another partner answers exactly like a missing one (404), so this
+// is never an existence oracle. A cancelled commission is refused
+// (409) — cancelled is a closed state; paying one would undo a
+// deliberate void.
+func (h *ResellerAdminHandler) MarkCommissionPaid(c *gin.Context) {
+	resellerID := c.Param("id")
+	commissionID := strings.TrimSpace(c.Param("commission_id"))
+	if commissionID == "" {
+		response.BadRequest(c, "commission_id is required in the URL path")
+		return
+	}
+	if _, err := h.store.FindResellerByID(c, resellerID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeAppErr(c, apperr.NotFound("RESELLER", resellerID))
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+	cm, err := h.store.FindCommissionByID(c, commissionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeAppErr(c, apperr.NotFound("COMMISSION", commissionID))
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+	// Ownership: the route's reseller must own the row. "Not yours" is
+	// deliberately the same 404 as "does not exist".
+	if cm.ResellerID != resellerID {
+		writeAppErr(c, apperr.NotFound("COMMISSION", commissionID))
+		return
+	}
+
+	// The body is optional (no body = "paid now"); a malformed one is
+	// still a 400.
+	var req struct {
+		PaidAt *time.Time `json:"paid_at"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	paidAt := time.Now()
+	if req.PaidAt != nil {
+		paidAt = *req.PaidAt
+	}
+
+	row, err := h.store.MarkCommissionPaid(c, commissionID, paidAt)
+	if err != nil {
+		if errors.Is(err, store.ErrCommissionCancelled) {
+			response.Err(c, 409, "COMMISSION_CANCELLED", "a cancelled commission cannot be marked paid")
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+	h.store.Audit(c, &model.AuditLog{
+		Entity: "commission", EntityID: commissionID, Action: "paid",
+		ActorType: "admin", ActorID: adminID(c),
+	})
+	response.OK(c, row)
+}
+
+// ─── Wholesale price overrides ───
+//
+// What this partner pays per plan instead of the public (Stripe)
+// price. The currency is the client's ISO 4217 code — only its shape
+// is validated offline (three uppercase letters); whether it matches
+// the plan's Stripe price is deliberately not decided here.
+
+// ListPriceOverrides — GET /admin/resellers/:id/prices
+//
+// The reseller's whole wholesale price list (it is bounded by the
+// plans a partner sells, so the listing is unpaged). A missing account
+// is a 404, not an empty list.
+func (h *ResellerAdminHandler) ListPriceOverrides(c *gin.Context) {
+	resellerID := c.Param("id")
+	if _, err := h.store.FindResellerByID(c, resellerID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeAppErr(c, apperr.NotFound("RESELLER", resellerID))
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+	rows, err := h.store.ListResellerPriceOverrides(c, resellerID)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	listOK(c, "prices", rows, len(rows), listPage(c))
+}
+
+// SetPriceOverride — PUT /admin/resellers/:id/prices/:plan_id
+//
+// Body: { unit_amount_minor (required, >= 0), currency (required,
+// three uppercase letters) }. PUT semantics: the (reseller, plan) pair
+// is the whole identity, so a repeat writes over the old deal in
+// place. The plan must exist (a price on a dead plan is a 404 the
+// admin can fix) and zero is a legal wholesale price (a comped
+// partner); negative is refused.
+func (h *ResellerAdminHandler) SetPriceOverride(c *gin.Context) {
+	resellerID := c.Param("id")
+	planID := strings.TrimSpace(c.Param("plan_id"))
+	if planID == "" {
+		response.BadRequest(c, "plan_id is required in the URL path")
+		return
+	}
+	var req struct {
+		UnitAmountMinor *int64 `json:"unit_amount_minor"`
+		Currency        string `json:"currency"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	if req.UnitAmountMinor == nil {
+		response.BadRequest(c, "unit_amount_minor is required")
+		return
+	}
+	if *req.UnitAmountMinor < 0 {
+		response.BadRequest(c, "unit_amount_minor must be >= 0")
+		return
+	}
+	if !model.ValidCurrencyCode(req.Currency) {
+		response.BadRequest(c, "currency must be 3 uppercase letters (ISO 4217)")
+		return
+	}
+	o := &model.ResellerPriceOverride{
+		ResellerID:      resellerID,
+		PlanID:          planID,
+		UnitAmountMinor: *req.UnitAmountMinor,
+		Currency:        req.Currency,
+	}
+	if err := h.store.SetResellerPriceOverride(c, o); err != nil {
+		if errors.Is(err, store.ErrPriceOverridePlanNotFound) {
+			writeAppErr(c, apperr.NotFound("PLAN", planID))
+			return
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			writeAppErr(c, apperr.NotFound("RESELLER", resellerID))
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+	h.store.Audit(c, &model.AuditLog{
+		Entity: "reseller_price", EntityID: planID, Action: "set",
+		ActorType: "admin", ActorID: adminID(c),
+		Changes: map[string]any{"reseller_id": resellerID},
+	})
+	// Answer the stored row (with its timestamps), not the request.
+	stored, err := h.store.FindResellerPriceOverride(c, resellerID, planID)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, stored)
+}
+
+// DeletePriceOverride — DELETE /admin/resellers/:id/prices/:plan_id
+//
+// Scoped by the (reseller, plan) pair, so a delete can never reach
+// another partner's price. A pair with no override is a 404, not a
+// 204 for nothing.
+func (h *ResellerAdminHandler) DeletePriceOverride(c *gin.Context) {
+	resellerID := c.Param("id")
+	planID := strings.TrimSpace(c.Param("plan_id"))
+	if planID == "" {
+		response.BadRequest(c, "plan_id is required in the URL path")
+		return
+	}
+	if err := h.store.DeleteResellerPriceOverride(c, resellerID, planID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeAppErr(c, apperr.NotFound("PRICE_OVERRIDE", planID))
+			return
+		}
+		response.Internal(c, err)
+		return
+	}
+	h.store.Audit(c, &model.AuditLog{
+		Entity: "reseller_price", EntityID: planID, Action: "deleted",
+		ActorType: "admin", ActorID: adminID(c),
+		Changes: map[string]any{"reseller_id": resellerID},
 	})
 	response.NoContent(c)
 }

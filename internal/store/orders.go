@@ -192,3 +192,52 @@ func (s *Store) InvoiceByOrder(ctx context.Context, orderID string) (*model.Invo
 		return nil, ErrInvoiceNotUnique
 	}
 }
+
+// ─── Billing / invoice state (PO workflow) ───
+
+// UpdateOrderBilling replaces the order's billing block — the billing
+// address, tax id, purchase-order number and invoicing contact. The
+// caller (the admin PATCH endpoint) has already validated and folded
+// the values; this only writes them. An empty value is written as NULL
+// (NULLIF), so "cleared" has exactly one representation in the ledger
+// and the nullable columns carry it. Only the billing columns and
+// updated_at move — the money, status and history of the order are not
+// this method's business.
+func (s *Store) UpdateOrderBilling(ctx context.Context, id string, o *model.Order) error {
+	q := s.DB.NewUpdate().Model((*model.Order)(nil)).
+		Set("billing_name = NULLIF(?, '')", o.BillingName).
+		Set("billing_company = NULLIF(?, '')", o.BillingCompany).
+		Set("billing_address_line1 = NULLIF(?, '')", o.BillingAddressLine1).
+		Set("billing_address_line2 = NULLIF(?, '')", o.BillingAddressLine2).
+		Set("billing_city = NULLIF(?, '')", o.BillingCity).
+		Set("billing_region = NULLIF(?, '')", o.BillingRegion).
+		Set("billing_postal_code = NULLIF(?, '')", o.BillingPostalCode).
+		Set("billing_country = NULLIF(?, '')", o.BillingCountry).
+		Set("customer_tax_id = NULLIF(?, '')", o.CustomerTaxID).
+		Set("po_number = NULLIF(?, '')", o.PONumber).
+		Set("billing_email = NULLIF(?, '')", o.BillingEmail).
+		Set("updated_at = now()").
+		Where("id = ?", id)
+	_, err := q.Exec(ctx)
+	return err
+}
+
+// UpdateInvoiceStatus moves an invoice to a new status and stamps the
+// instant that move implies — voided_at for a void, uncollectible_at
+// for a give-up. Like UpdateOrderStatus it writes what it is told: the
+// transition guard (model.CanTransitionInvoice) is the caller's
+// business, and the optional instants are optional because only some
+// transitions stamp one.
+func (s *Store) UpdateInvoiceStatus(ctx context.Context, id, status string, voidedAt, uncollectibleAt *time.Time) error {
+	q := s.DB.NewUpdate().Model((*model.Invoice)(nil)).
+		Set("status = ?", status).
+		Where("id = ?", id)
+	if voidedAt != nil {
+		q = q.Set("voided_at = ?", *voidedAt)
+	}
+	if uncollectibleAt != nil {
+		q = q.Set("uncollectible_at = ?", *uncollectibleAt)
+	}
+	_, err := q.Exec(ctx)
+	return err
+}

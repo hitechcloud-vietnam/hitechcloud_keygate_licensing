@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -36,6 +37,25 @@ type fakeResellerStore struct {
 	lastAllocate [2]string
 	lastDealloc  string
 	audits       []*model.AuditLog
+
+	// Commission ledger (slice 2).
+	commissions     map[string]*model.Commission
+	byOrder         map[[2]string]*model.Commission
+	commissionList  []*model.Commission
+	accrueErr       error
+	markPaidErr     error
+	listCommissions [2]string // last (reseller_id, status) filter
+	lastAccrue      *model.Commission
+	lastMarkPaidID  string
+	lastPaidAt      time.Time
+
+	// Wholesale price overrides (slice 2).
+	prices          map[[2]string]*model.ResellerPriceOverride
+	priceList       []*model.ResellerPriceOverride
+	priceErr        error
+	priceDeleteErr  error
+	lastPrice       *model.ResellerPriceOverride
+	lastPriceDelete [2]string
 }
 
 func (f *fakeResellerStore) ListResellers(_ context.Context, _, _ string, _ store.Page) ([]*model.Reseller, int, error) {
@@ -114,6 +134,110 @@ func (f *fakeResellerStore) ListResellerLicenses(_ context.Context, resellerID s
 
 func (f *fakeResellerStore) Audit(_ context.Context, log *model.AuditLog) {
 	f.audits = append(f.audits, log)
+}
+
+// AccrueCommission mirrors the real store's idempotency: a repeat for
+// the same (reseller, order) answers the ORIGINAL row with created=false
+// and writes nothing.
+func (f *fakeResellerStore) AccrueCommission(_ context.Context, cm *model.Commission) (*model.Commission, bool, error) {
+	if f.accrueErr != nil {
+		return nil, false, f.accrueErr
+	}
+	if f.byOrder == nil {
+		f.byOrder = map[[2]string]*model.Commission{}
+	}
+	if f.commissions == nil {
+		f.commissions = map[string]*model.Commission{}
+	}
+	key := [2]string{cm.ResellerID, cm.OrderID}
+	if existing, ok := f.byOrder[key]; ok {
+		cp := *existing
+		return &cp, false, nil
+	}
+	f.lastAccrue = cm
+	row := *cm
+	row.ID = "com-new"
+	row.Status = model.CommissionStatusAccrued
+	row.AmountMinor = model.CommissionAmount(cm.BasisMinor, cm.BPS)
+	f.byOrder[key] = &row
+	f.commissions[row.ID] = &row
+	cp := row
+	return &cp, true, nil
+}
+
+func (f *fakeResellerStore) FindCommissionByID(_ context.Context, id string) (*model.Commission, error) {
+	if cm, ok := f.commissions[id]; ok {
+		cp := *cm
+		return &cp, nil
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (f *fakeResellerStore) ListCommissions(_ context.Context, resellerID, status string, _ store.Page) ([]*model.Commission, int, error) {
+	f.listCommissions = [2]string{resellerID, status}
+	return f.commissionList, len(f.commissionList), nil
+}
+
+func (f *fakeResellerStore) MarkCommissionPaid(_ context.Context, id string, paidAt time.Time) (*model.Commission, error) {
+	if f.markPaidErr != nil {
+		return nil, f.markPaidErr
+	}
+	cm, ok := f.commissions[id]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	f.lastMarkPaidID = id
+	f.lastPaidAt = paidAt
+	cm.Status = model.CommissionStatusPaid
+	cm.PaidAt = &paidAt
+	cp := *cm
+	return &cp, nil
+}
+
+func (f *fakeResellerStore) FindResellerPriceOverride(_ context.Context, resellerID, planID string) (*model.ResellerPriceOverride, error) {
+	if o, ok := f.prices[[2]string{resellerID, planID}]; ok {
+		cp := *o
+		return &cp, nil
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (f *fakeResellerStore) ListResellerPriceOverrides(_ context.Context, resellerID string) ([]*model.ResellerPriceOverride, error) {
+	if f.priceErr != nil {
+		return nil, f.priceErr
+	}
+	rows := f.priceList
+	if rows == nil {
+		rows = []*model.ResellerPriceOverride{}
+	}
+	_ = resellerID
+	return rows, nil
+}
+
+func (f *fakeResellerStore) SetResellerPriceOverride(_ context.Context, o *model.ResellerPriceOverride) error {
+	if f.priceErr != nil {
+		return f.priceErr
+	}
+	if f.prices == nil {
+		f.prices = map[[2]string]*model.ResellerPriceOverride{}
+	}
+	f.lastPrice = o
+	cp := *o
+	f.prices[[2]string{o.ResellerID, o.PlanID}] = &cp
+	return nil
+}
+
+func (f *fakeResellerStore) DeleteResellerPriceOverride(_ context.Context, resellerID, planID string) error {
+	if f.priceDeleteErr != nil {
+		return f.priceDeleteErr
+	}
+	key := [2]string{resellerID, planID}
+	if _, ok := f.prices[key]; !ok {
+		return sql.ErrNoRows
+	}
+	delete(f.prices, key)
+	f.lastPriceDelete = key
+	return nil
 }
 
 func resellerReq(t *testing.T, method, target, body string) (*httptest.ResponseRecorder, *gin.Context) {
@@ -503,5 +627,375 @@ func TestResellerListStatusFilterValidation(t *testing.T) {
 	h.List(c2)
 	if w2.Code != 200 {
 		t.Fatalf("good status filter = %d, want 200", w2.Code)
+	}
+}
+
+// ─── Commission ledger ───
+
+// What an accrual cannot carry: a missing or blank order id, a missing
+// or negative basis, a rate outside 0–10000 bps. Every one is a 400
+// the admin can fix, and none of them reaches the store.
+func TestAccrueCommissionValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"missing order_id", `{"basis_minor":1000,"bps":1000}`},
+		{"blank order_id", `{"order_id":"  ","basis_minor":1000,"bps":1000}`},
+		{"missing basis_minor", `{"order_id":"ord-1","bps":1000}`},
+		{"negative basis_minor", `{"order_id":"ord-1","basis_minor":-1,"bps":1000}`},
+		{"negative bps", `{"order_id":"ord-1","basis_minor":1000,"bps":-1}`},
+		{"bps over 100%", `{"order_id":"ord-1","basis_minor":1000,"bps":10001}`},
+		{"garbage body", `not-json`},
+	}
+	for _, tc := range cases {
+		fake := &fakeResellerStore{
+			resellers: map[string]*model.Reseller{"r1": {ID: "r1", CommissionBPS: 1000}},
+		}
+		h := NewResellerAdminHandler(nil)
+		h.store = fake
+
+		w, c := resellerReq(t, "POST", "/admin/resellers/r1/commissions", tc.body)
+		c.Params = gin.Params{{Key: "id", Value: "r1"}}
+		h.AccrueCommission(c)
+		if w.Code != 400 {
+			t.Errorf("%s: status = %d, want 400; body %s", tc.name, w.Code, w.Body.String())
+		}
+		if fake.lastAccrue != nil {
+			t.Errorf("%s: a refused accrual still wrote %+v", tc.name, fake.lastAccrue)
+		}
+	}
+}
+
+// bps is optional and defaults to the reseller's contract rate; a
+// stated rate is used verbatim once it is inside 0–10000.
+func TestAccrueCommissionBPSHandling(t *testing.T) {
+	fake := &fakeResellerStore{
+		resellers: map[string]*model.Reseller{"r1": {ID: "r1", CommissionBPS: 2500}},
+	}
+	h := NewResellerAdminHandler(nil)
+	h.store = fake
+
+	w, c := resellerReq(t, "POST", "/admin/resellers/r1/commissions", `{"order_id":"ord-1","basis_minor":1000}`)
+	c.Params = gin.Params{{Key: "id", Value: "r1"}}
+	h.AccrueCommission(c)
+	if w.Code != 201 {
+		t.Fatalf("defaulted bps status = %d, want 201; body %s", w.Code, w.Body.String())
+	}
+	if fake.lastAccrue == nil || fake.lastAccrue.BPS != 2500 {
+		t.Fatalf("defaulted bps = %+v, want the reseller's 2500", fake.lastAccrue)
+	}
+
+	w2, c2 := resellerReq(t, "POST", "/admin/resellers/r1/commissions", `{"order_id":"ord-2","basis_minor":1000,"bps":0}`)
+	c2.Params = gin.Params{{Key: "id", Value: "r1"}}
+	h.AccrueCommission(c2)
+	if w2.Code != 201 {
+		t.Fatalf("explicit zero bps status = %d, want 201 (zero is meaningful)", w2.Code)
+	}
+	if fake.lastAccrue.BPS != 0 {
+		t.Errorf("explicit bps = %d, want 0", fake.lastAccrue.BPS)
+	}
+}
+
+// The accrual is idempotent per (reseller, order): the first POST
+// creates and audits, a retry answers the ORIGINAL row (200, same id)
+// and writes nothing. A missing reseller is a 404 before anything else.
+func TestAccrueCommissionIdempotency(t *testing.T) {
+	fake := &fakeResellerStore{
+		resellers: map[string]*model.Reseller{"r1": {ID: "r1", CommissionBPS: 1000}},
+	}
+	h := NewResellerAdminHandler(nil)
+	h.store = fake
+
+	w, c := resellerReq(t, "POST", "/admin/resellers/r1/commissions", `{"order_id":"ord-1","basis_minor":1000,"bps":1000}`)
+	c.Params = gin.Params{{Key: "id", Value: "r1"}}
+	h.AccrueCommission(c)
+	if w.Code != 201 {
+		t.Fatalf("first accrual status = %d, want 201; body %s", w.Code, w.Body.String())
+	}
+	if len(fake.audits) != 1 || fake.audits[0].Entity != "commission" || fake.audits[0].Action != "accrued" {
+		t.Fatalf("first accrual audits = %+v, want one commission 'accrued'", fake.audits)
+	}
+
+	// Replay with different numbers: the first writer wins.
+	w2, c2 := resellerReq(t, "POST", "/admin/resellers/r1/commissions", `{"order_id":"ord-1","basis_minor":999999,"bps":10000}`)
+	c2.Params = gin.Params{{Key: "id", Value: "r1"}}
+	h.AccrueCommission(c2)
+	if w2.Code != 200 {
+		t.Fatalf("replay status = %d, want 200 (the original row)", w2.Code)
+	}
+	var body struct {
+		Data model.Commission `json:"data"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &body); err != nil {
+		t.Fatalf("bad replay body: %v", err)
+	}
+	if body.Data.ID != "com-new" || body.Data.BasisMinor != 1000 || body.Data.AmountMinor != 100 {
+		t.Errorf("replay row = %+v, want the original com-new at basis 1000", body.Data)
+	}
+	if len(fake.audits) != 1 {
+		t.Errorf("a replay audited again: %+v", fake.audits)
+	}
+
+	// Unknown reseller -> 404, nothing written.
+	w3, c3 := resellerReq(t, "POST", "/admin/resellers/nope/commissions", `{"order_id":"ord-9","basis_minor":1000}`)
+	c3.Params = gin.Params{{Key: "id", Value: "nope"}}
+	h.AccrueCommission(c3)
+	if w3.Code != 404 {
+		t.Fatalf("unknown reseller status = %d, want 404", w3.Code)
+	}
+}
+
+// Marking paid: a missing commission is 404, one that belongs to
+// another reseller is the SAME 404 (no existence oracle), a cancelled
+// one is refused 409, and a clean mark is 200 with the disbursement
+// date recorded and audited.
+func TestMarkCommissionPaidResponses(t *testing.T) {
+	// Missing -> 404 COMMISSION_NOT_FOUND.
+	fake := &fakeResellerStore{resellers: map[string]*model.Reseller{"r1": {ID: "r1"}}}
+	h := NewResellerAdminHandler(nil)
+	h.store = fake
+	w, c := resellerReq(t, "POST", "/admin/resellers/r1/commissions/nope/paid", "")
+	c.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "commission_id", Value: "nope"}}
+	h.MarkCommissionPaid(c)
+	if w.Code != 404 {
+		t.Fatalf("missing commission status = %d, want 404", w.Code)
+	}
+	if code := resellerErrCode(t, w); code != "COMMISSION_NOT_FOUND" {
+		t.Errorf("code = %q, want COMMISSION_NOT_FOUND", code)
+	}
+
+	// Someone else's commission -> the same 404.
+	fake = &fakeResellerStore{
+		resellers:   map[string]*model.Reseller{"r1": {ID: "r1"}},
+		commissions: map[string]*model.Commission{"com-x": {ID: "com-x", ResellerID: "r2"}},
+	}
+	h.store = fake
+	w2, c2 := resellerReq(t, "POST", "/admin/resellers/r1/commissions/com-x/paid", "")
+	c2.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "commission_id", Value: "com-x"}}
+	h.MarkCommissionPaid(c2)
+	if w2.Code != 404 {
+		t.Fatalf("cross-reseller status = %d, want 404", w2.Code)
+	}
+	if len(fake.audits) != 0 {
+		t.Errorf("a refused mark left %d audit entries", len(fake.audits))
+	}
+
+	// Cancelled -> 409, machine-readable.
+	fake = &fakeResellerStore{
+		resellers:   map[string]*model.Reseller{"r1": {ID: "r1"}},
+		commissions: map[string]*model.Commission{"com-c": {ID: "com-c", ResellerID: "r1", Status: model.CommissionStatusCancelled}},
+		markPaidErr: store.ErrCommissionCancelled,
+	}
+	h.store = fake
+	w3, c3 := resellerReq(t, "POST", "/admin/resellers/r1/commissions/com-c/paid", "")
+	c3.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "commission_id", Value: "com-c"}}
+	h.MarkCommissionPaid(c3)
+	if w3.Code != 409 {
+		t.Fatalf("cancelled mark status = %d, want 409", w3.Code)
+	}
+	if code := resellerErrCode(t, w3); code != "COMMISSION_CANCELLED" {
+		t.Errorf("code = %q, want COMMISSION_CANCELLED", code)
+	}
+
+	// Clean mark with a stated date -> 200, that date recorded.
+	fake = &fakeResellerStore{
+		resellers:   map[string]*model.Reseller{"r1": {ID: "r1"}},
+		commissions: map[string]*model.Commission{"com-1": {ID: "com-1", ResellerID: "r1", Status: model.CommissionStatusApproved}},
+	}
+	h.store = fake
+	w4, c4 := resellerReq(t, "POST", "/admin/resellers/r1/commissions/com-1/paid", `{"paid_at":"2026-10-08T12:00:00Z"}`)
+	c4.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "commission_id", Value: "com-1"}}
+	h.MarkCommissionPaid(c4)
+	if w4.Code != 200 {
+		t.Fatalf("clean mark status = %d, want 200; body %s", w4.Code, w4.Body.String())
+	}
+	want := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	if fake.lastMarkPaidID != "com-1" || !fake.lastPaidAt.Equal(want) {
+		t.Errorf("marked = (%q, %v), want (com-1, %v)", fake.lastMarkPaidID, fake.lastPaidAt, want)
+	}
+	if len(fake.audits) != 1 || fake.audits[0].Entity != "commission" || fake.audits[0].Action != "paid" {
+		t.Errorf("clean mark audits = %+v, want one commission 'paid'", fake.audits)
+	}
+}
+
+// The ledger list checks the reseller first (404, not an empty page)
+// and refuses a status filter outside the closed vocabulary.
+func TestListCommissionsResponses(t *testing.T) {
+	fake := &fakeResellerStore{resellers: map[string]*model.Reseller{}}
+	h := NewResellerAdminHandler(nil)
+	h.store = fake
+	w, c := resellerReq(t, "GET", "/admin/resellers/nope/commissions", "")
+	c.Params = gin.Params{{Key: "id", Value: "nope"}}
+	h.ListCommissions(c)
+	if w.Code != 404 {
+		t.Fatalf("missing reseller status = %d, want 404", w.Code)
+	}
+
+	fake = &fakeResellerStore{resellers: map[string]*model.Reseller{"r1": {ID: "r1"}}}
+	h.store = fake
+	w2, c2 := resellerReq(t, "GET", "/admin/resellers/r1/commissions?status=bogus", "")
+	c2.Params = gin.Params{{Key: "id", Value: "r1"}}
+	h.ListCommissions(c2)
+	if w2.Code != 400 {
+		t.Fatalf("bad status filter = %d, want 400", w2.Code)
+	}
+	if fake.listCommissions != [2]string{} {
+		t.Errorf("a refused filter still asked the store for %v", fake.listCommissions)
+	}
+
+	fake = &fakeResellerStore{
+		resellers:      map[string]*model.Reseller{"r1": {ID: "r1"}},
+		commissionList: []*model.Commission{{ID: "com-1", ResellerID: "r1", Status: model.CommissionStatusPaid}},
+	}
+	h.store = fake
+	w3, c3 := resellerReq(t, "GET", "/admin/resellers/r1/commissions?status=paid", "")
+	c3.Params = gin.Params{{Key: "id", Value: "r1"}}
+	h.ListCommissions(c3)
+	if w3.Code != 200 {
+		t.Fatalf("list status = %d, want 200; body %s", w3.Code, w3.Body.String())
+	}
+	if fake.listCommissions != [2]string{"r1", "paid"} {
+		t.Errorf("store filter = %v, want [r1 paid]", fake.listCommissions)
+	}
+}
+
+// ─── Wholesale price overrides ───
+
+// What an override cannot carry: a negative amount, a missing amount,
+// a currency whose shape is not three uppercase letters. Shape is all
+// that is checkable offline — "USD" passes, "usd" does not.
+func TestSetPriceOverrideValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"lowercase currency", `{"unit_amount_minor":100,"currency":"usd"}`},
+		{"short currency", `{"unit_amount_minor":100,"currency":"US"}`},
+		{"digit currency", `{"unit_amount_minor":100,"currency":"US1"}`},
+		{"missing currency", `{"unit_amount_minor":100}`},
+		{"negative amount", `{"unit_amount_minor":-1,"currency":"USD"}`},
+		{"missing amount", `{"currency":"USD"}`},
+		{"garbage body", `not-json`},
+	}
+	for _, tc := range cases {
+		fake := &fakeResellerStore{resellers: map[string]*model.Reseller{"r1": {ID: "r1"}}}
+		h := NewResellerAdminHandler(nil)
+		h.store = fake
+
+		w, c := resellerReq(t, "PUT", "/admin/resellers/r1/prices/plan-1", tc.body)
+		c.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "plan_id", Value: "plan-1"}}
+		h.SetPriceOverride(c)
+		if w.Code != 400 {
+			t.Errorf("%s: status = %d, want 400; body %s", tc.name, w.Code, w.Body.String())
+		}
+		if fake.lastPrice != nil {
+			t.Errorf("%s: a refused write still reached the store: %+v", tc.name, fake.lastPrice)
+		}
+	}
+}
+
+// A reseller with commission ledger rows is history, not clutter:
+// DeleteReseller refuses and the handler says 409 with its own code,
+// distinct from the allocations refusal.
+func TestDeleteRefusedWhileCommissionsExist(t *testing.T) {
+	fake := &fakeResellerStore{deleteErr: store.ErrResellerHasCommissions}
+	h := NewResellerAdminHandler(nil)
+	h.store = fake
+
+	w, c := resellerReq(t, "DELETE", "/admin/resellers/r1", "")
+	c.Params = gin.Params{{Key: "id", Value: "r1"}}
+	h.Delete(c)
+	if w.Code != 409 {
+		t.Fatalf("status = %d, want 409; body %s", w.Code, w.Body.String())
+	}
+	if code := resellerErrCode(t, w); code != "RESSELLER_HAS_COMMISSIONS" {
+		t.Errorf("code = %q, want RESSELLER_HAS_COMMISSIONS", code)
+	}
+}
+
+// The refusals that are state, not syntax: a plan_id naming nothing is
+// 404 (PLAN_NOT_FOUND), a missing reseller 404, and a clean set is 200
+// answering the stored row with an audit on the reseller_price entity.
+func TestSetPriceOverrideResponses(t *testing.T) {
+	fake := &fakeResellerStore{
+		resellers: map[string]*model.Reseller{"r1": {ID: "r1"}},
+		priceErr:  store.ErrPriceOverridePlanNotFound,
+	}
+	h := NewResellerAdminHandler(nil)
+	h.store = fake
+	w, c := resellerReq(t, "PUT", "/admin/resellers/r1/prices/nope", `{"unit_amount_minor":100,"currency":"USD"}`)
+	c.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "plan_id", Value: "nope"}}
+	h.SetPriceOverride(c)
+	if w.Code != 404 {
+		t.Fatalf("unknown plan status = %d, want 404", w.Code)
+	}
+	if code := resellerErrCode(t, w); code != "PLAN_NOT_FOUND" {
+		t.Errorf("code = %q, want PLAN_NOT_FOUND", code)
+	}
+
+	fake = &fakeResellerStore{
+		resellers: map[string]*model.Reseller{"r1": {ID: "r1"}},
+		priceErr:  sql.ErrNoRows,
+	}
+	h.store = fake
+	w2, c2 := resellerReq(t, "PUT", "/admin/resellers/nope/prices/plan-1", `{"unit_amount_minor":100,"currency":"USD"}`)
+	c2.Params = gin.Params{{Key: "id", Value: "nope"}, {Key: "plan_id", Value: "plan-1"}}
+	h.SetPriceOverride(c2)
+	if w2.Code != 404 {
+		t.Fatalf("unknown reseller status = %d, want 404", w2.Code)
+	}
+
+	fake = &fakeResellerStore{resellers: map[string]*model.Reseller{"r1": {ID: "r1"}}}
+	h.store = fake
+	w3, c3 := resellerReq(t, "PUT", "/admin/resellers/r1/prices/plan-1", `{"unit_amount_minor":0,"currency":"VND"}`)
+	c3.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "plan_id", Value: "plan-1"}}
+	h.SetPriceOverride(c3)
+	if w3.Code != 200 {
+		t.Fatalf("clean set status = %d, want 200; body %s", w3.Code, w3.Body.String())
+	}
+	if fake.lastPrice == nil || fake.lastPrice.UnitAmountMinor != 0 || fake.lastPrice.Currency != "VND" {
+		t.Errorf("stored override = %+v, want zero VND (zero is a legal wholesale price)", fake.lastPrice)
+	}
+	if len(fake.audits) != 1 || fake.audits[0].Entity != "reseller_price" || fake.audits[0].Action != "set" {
+		t.Errorf("clean set audits = %+v, want one reseller_price 'set'", fake.audits)
+	}
+}
+
+// Deleting an override: a pair with no override is 404, a clean delete
+// is 204 with an audit. The pair scopes the delete — a wrong reseller
+// never reaches another partner's row.
+func TestDeletePriceOverrideResponses(t *testing.T) {
+	fake := &fakeResellerStore{prices: map[[2]string]*model.ResellerPriceOverride{}}
+	h := NewResellerAdminHandler(nil)
+	h.store = fake
+	w, c := resellerReq(t, "DELETE", "/admin/resellers/r1/prices/plan-1", "")
+	c.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "plan_id", Value: "plan-1"}}
+	h.DeletePriceOverride(c)
+	if w.Code != 404 {
+		t.Fatalf("missing override status = %d, want 404", w.Code)
+	}
+	if code := resellerErrCode(t, w); code != "PRICE_OVERRIDE_NOT_FOUND" {
+		t.Errorf("code = %q, want PRICE_OVERRIDE_NOT_FOUND", code)
+	}
+
+	fake = &fakeResellerStore{
+		prices: map[[2]string]*model.ResellerPriceOverride{
+			{"r1", "plan-1"}: {ResellerID: "r1", PlanID: "plan-1"},
+		},
+	}
+	h.store = fake
+	w2, c2 := resellerReq(t, "DELETE", "/admin/resellers/r1/prices/plan-1", "")
+	c2.Params = gin.Params{{Key: "id", Value: "r1"}, {Key: "plan_id", Value: "plan-1"}}
+	h.DeletePriceOverride(c2)
+	c2.Writer.WriteHeaderNow() // flush the recorded 204 (see above)
+	if w2.Code != 204 {
+		t.Fatalf("clean delete status = %d, want 204", w2.Code)
+	}
+	if fake.lastPriceDelete != [2]string{"r1", "plan-1"} {
+		t.Errorf("deleted pair = %v, want [r1 plan-1]", fake.lastPriceDelete)
+	}
+	if len(fake.audits) != 1 || fake.audits[0].Action != "deleted" {
+		t.Errorf("clean delete audits = %+v, want one 'deleted'", fake.audits)
 	}
 }
