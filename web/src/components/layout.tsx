@@ -146,7 +146,15 @@ export function AdminLayout() {
     return (
       // Tapping a link inside the drawer navigates and closes it; on
       // a wide screen there is no drawer and the state is inert.
-      <Link key={item.to} to={item.to} onClick={() => setNavOpen(false)}>
+      // aria-current says which page this is; the ring is the visible
+      // keyboard focus state on a link whose body is a styled div.
+      <Link
+        key={item.to}
+        to={item.to}
+        onClick={() => setNavOpen(false)}
+        aria-current={active ? "page" : undefined}
+        className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         <div
           className={cn(
             "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
@@ -186,7 +194,9 @@ export function AdminLayout() {
           const group = entry as NavGroup
           return (
             <div key={group.label} className={cn(idx > 0 && "mt-4")}>
-              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider">
+              {/* Solid muted-foreground: at /60 opacity this small text
+                  fell under the WCAG AA 4.5:1 floor. */}
+              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 {group.label}
               </div>
               {group.items.map(renderNavItem)}
@@ -244,6 +254,14 @@ export function AdminLayout() {
 
   return (
     <div className="flex h-screen bg-background">
+      {/* First tab stop on every page: past the sidebar and header
+        straight to the content, for keyboard users. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
+      >
+        {t("nav.skipToContent")}
+      </a>
       {/* Sidebar — a column of its own from md up, and the contents of
         the drawer below it. 240px of a 390px phone is not a sidebar,
         it is the whole screen. */}
@@ -284,7 +302,7 @@ export function AdminLayout() {
           <LanguageSwitcher iconOnly />
         </header>
 
-        <main className="flex-1 overflow-auto">
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-auto focus:outline-none">
           <div className="p-4 md:p-8">
             <ErrorBoundary>
               <Outlet />
@@ -341,33 +359,49 @@ export function PortalLayout() {
 
   return (
     <div className="min-h-screen bg-background">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
+      >
+        {t("nav.skipToContent")}
+      </a>
       <header className="border-b bg-card">
         <div className="max-w-5xl mx-auto flex items-center justify-between h-14 px-4">
           <Link to="/portal" className="flex items-center gap-2 font-bold text-lg tracking-tight">
             <img src={logo_url || "/logo.svg"} alt={site_name} className="h-6 w-6" />
             {site_name}
           </Link>
-          <div className="flex items-center gap-4">
+          {/* The words hide on a phone and the icons stay: at 375px a
+              row of five labelled controls overflows the header, and a
+              header that scrolls sideways takes the page with it. */}
+          <div className="flex items-center gap-1 sm:gap-4">
             <NotificationBell />
-            <Link to="/marketplace">
+            <Link to="/marketplace" className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <Button variant="ghost" size="sm" className="gap-2">
                 <Store className="h-4 w-4" />
-                {t("nav.marketplace")}
+                <span className="hidden sm:inline">{t("nav.marketplace")}</span>
               </Button>
             </Link>
             {user.is_admin && (
-              <Link to="/admin">
-                <Button variant="outline" size="sm">
-                  Admin Panel
+              <Link to="/admin" className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <Button variant="outline" size="sm" aria-label={t("nav.adminPanel")}>
+                  {/* Icon on a phone, words from sm up; the aria-label
+                      names it the same either way. */}
+                  <span className="sm:hidden" aria-hidden="true">
+                    <LayoutDashboard className="h-4 w-4" />
+                  </span>
+                  <span className="hidden sm:inline">{t("nav.adminPanel")}</span>
                 </Button>
               </Link>
             )}
             <LanguageSwitcher />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="gap-2">
+                <Button variant="ghost" size="sm" className="gap-2" aria-label={user.name || user.email}>
                   <User className="h-4 w-4" />
-                  {user.name || user.email}
+                  {/* The account name is the first thing to go on a
+                      375px header; the menu keeps the full name. */}
+                  <span className="hidden max-w-[14ch] truncate sm:inline">{user.name || user.email}</span>
                   <ChevronDown className="h-3 w-3 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
@@ -390,7 +424,12 @@ export function PortalLayout() {
               const active =
                 item.to === "/portal" ? location.pathname === "/portal" : location.pathname.startsWith(item.to)
               return (
-                <Link key={item.to} to={item.to}>
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  aria-current={active ? "page" : undefined}
+                  className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   <div
                     className={cn(
                       "flex items-center gap-2 px-3 py-2 text-sm font-medium border-b-2 transition-colors",
@@ -408,7 +447,7 @@ export function PortalLayout() {
           </nav>
         </div>
       </header>
-      <main className="max-w-5xl mx-auto p-4 md:p-8">
+      <main id="main-content" tabIndex={-1} className="max-w-5xl mx-auto p-4 md:p-8 focus:outline-none">
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>
@@ -438,6 +477,12 @@ export function PublicLayout() {
   const { t } = useI18n()
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
+      >
+        {t("nav.skipToContent")}
+      </a>
       <header className="border-b bg-card">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
           <Link to="/marketplace" className="flex items-center gap-2 text-lg font-bold tracking-tight">
@@ -445,10 +490,10 @@ export function PublicLayout() {
             {site_name}
           </Link>
           <nav className="flex items-center gap-1">
-            <Link to="/marketplace">
+            <Link to="/marketplace" className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <div className="flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-medium text-foreground">
                 <Store className="h-4 w-4" />
-                {t("nav.marketplace")}
+                <span className="hidden sm:inline">{t("nav.marketplace")}</span>
               </div>
             </Link>
             <LanguageSwitcher />
@@ -460,7 +505,7 @@ export function PublicLayout() {
           </nav>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-6xl flex-1 p-4 md:p-8">
+      <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-6xl flex-1 p-4 md:p-8 focus:outline-none">
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>
@@ -481,9 +526,14 @@ export function PublicLayout() {
 }
 
 function LoadingScreen() {
+  const { t } = useI18n()
   return (
-    <div className="flex items-center justify-center h-screen">
-      <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
+    <div className="flex items-center justify-center h-screen" role="status">
+      <span className="sr-only">{t("common.loading")}</span>
+      <div
+        className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"
+        aria-hidden="true"
+      />
     </div>
   )
 }

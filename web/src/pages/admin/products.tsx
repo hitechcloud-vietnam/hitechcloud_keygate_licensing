@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Cloud, Laptop, Layers, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { CopyableId } from "@/components/copyable-id"
+import { ExportCsvButton } from "@/components/export-csv"
 import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
@@ -92,9 +93,16 @@ export default function ProductsPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("products.title")}</h1>
           <p className="text-muted-foreground">{t("products.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4 mr-2" /> {t("products.new")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="products"
+            columns={[t("common.name"), t("products.slug"), t("common.type"), t("common.created")]}
+            rows={products.map((p) => [p.name, p.slug, p.type, p.created_at])}
+          />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" /> {t("products.new")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-4">
@@ -102,6 +110,7 @@ export default function ProductsPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={t("common.search")}
+            aria-label={t("common.search")}
             value={search}
             onChange={(e) => {
               setSearch(e.target.value)

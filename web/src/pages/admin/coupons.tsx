@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
+import { ExportCsvButton } from "@/components/export-csv"
 import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
@@ -94,14 +95,36 @@ export default function CouponsPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("coupons.title")}</h1>
           <p className="text-muted-foreground">{t("coupons.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4 mr-2" /> {t("coupons.new")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="coupons"
+            columns={[
+              t("coupons.code"),
+              t("common.type"),
+              t("coupons.colValue"),
+              t("coupons.colValidity"),
+              t("coupons.colRedemptions"),
+              t("common.status"),
+            ]}
+            rows={coupons.map((c) => [
+              c.code,
+              c.type === "percent_off" ? t("coupons.percentOff") : t("coupons.fixedOff"),
+              c.type === "percent_off" ? formatBps(c.value_bps) : formatMinor(c.value_minor, c.currency || ""),
+              c.starts_at || c.ends_at ? `${formatDate(c.starts_at)} – ${formatDate(c.ends_at)}` : t("coupons.anyTime"),
+              `${c.times_redeemed} / ${c.max_redemptions > 0 ? c.max_redemptions : t("coupons.unlimited")}`,
+              c.active ? t("common.active") : t("common.inactive"),
+            ])}
+          />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" /> {t("coupons.new")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"
@@ -160,10 +183,22 @@ export default function CouponsPage() {
                       </DataTableCell>
                       <DataTableCell>
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => setEditing(c)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("common.edit")}
+                            aria-label={t("common.edit")}
+                            onClick={() => setEditing(c)}
+                          >
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => setDeleting(c)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("common.delete")}
+                            aria-label={t("common.delete")}
+                            onClick={() => setDeleting(c)}
+                          >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>

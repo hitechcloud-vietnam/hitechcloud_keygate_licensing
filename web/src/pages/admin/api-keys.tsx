@@ -137,6 +137,7 @@ export default function APIKeysPage() {
         <ProductSelect value={productFilter} onChange={setProductFilter} allLabel={t("filter.allProducts")} />
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"

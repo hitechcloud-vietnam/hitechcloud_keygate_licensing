@@ -223,7 +223,7 @@ export default function ReportsPage() {
             <div className="w-full sm:w-56">
               <Label>{t("reports.reportType")}</Label>
               <Select value={type} onValueChange={setType}>
-                <SelectTrigger className="mt-1.5">
+                <SelectTrigger className="mt-1.5" aria-label={t("reports.reportType")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -243,7 +243,7 @@ export default function ReportsPage() {
             <div className="w-full sm:w-40">
               <Label>{t("reports.groupBy")}</Label>
               <Select value={groupBy} onValueChange={setGroupBy}>
-                <SelectTrigger className="mt-1.5">
+                <SelectTrigger className="mt-1.5" aria-label={t("reports.groupBy")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

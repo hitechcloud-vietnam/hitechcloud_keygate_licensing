@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, Eye, Reply, Star, Trash2, X } from "lucide-react"
 import { useState } from "react"
 import { ListEmptyState } from "@/components/empty-state"
+import { ExportCsvButton } from "@/components/export-csv"
 import { StarRating } from "@/components/star-rating"
 import { showToast, toastError } from "@/components/toast"
 import {
@@ -92,6 +93,9 @@ export default function AdminReviewsPage() {
   const [detail, setDetail] = useState<Review | null>(null)
   const [replying, setReplying] = useState<Review | null>(null)
   const [deleting, setDeleting] = useState<Review | null>(null)
+  // Rejecting hides a customer's words from the marketplace — a
+  // destructive move (§70), so it asks before it acts.
+  const [rejecting, setRejecting] = useState<Review | null>(null)
 
   const { items: reviews, total, totalPages } = pg.from(data, data?.reviews)
 
@@ -154,12 +158,13 @@ export default function AdminReviewsPage() {
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("reviews.productFilterPlaceholder")}
+          aria-label={t("reviews.productFilterPlaceholder")}
           value={productInput}
           onChange={(e) => setProductInput(e.target.value)}
           className="w-full sm:w-64"
         />
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-48" aria-label={t("common.status")}>
             <SelectValue placeholder={t("filter.allStatuses")} />
           </SelectTrigger>
           <SelectContent>
@@ -171,6 +176,25 @@ export default function AdminReviewsPage() {
             ))}
           </SelectContent>
         </Select>
+        <ExportCsvButton
+          filename="reviews"
+          columns={[
+            t("common.product"),
+            t("reviews.colAuthor"),
+            t("reviews.colRating"),
+            t("reviews.colReview"),
+            t("common.status"),
+            t("common.created"),
+          ]}
+          rows={reviews.map((r) => [
+            productName(r.product_id) || r.product_id,
+            r.customer_name || t("reviews.anonymous"),
+            r.rating,
+            r.title || r.body,
+            r.status,
+            formatDate(r.created_at),
+          ])}
+        />
       </div>
 
       <Card>
@@ -245,6 +269,7 @@ export default function AdminReviewsPage() {
                               variant="ghost"
                               size="icon"
                               title={t("reviews.approve")}
+                              aria-label={t("reviews.approve")}
                               disabled={moderateMut.isPending}
                               onClick={() => moderateMut.mutate({ id: r.id, action: "approve" })}
                             >
@@ -256,24 +281,38 @@ export default function AdminReviewsPage() {
                               variant="ghost"
                               size="icon"
                               title={t("reviews.reject")}
+                              aria-label={t("reviews.reject")}
                               disabled={moderateMut.isPending}
-                              onClick={() => moderateMut.mutate({ id: r.id, action: "reject" })}
+                              onClick={() => setRejecting(r)}
                             >
                               <X className="h-4 w-4 text-destructive" />
                             </Button>
                           )}
-                          <Button variant="ghost" size="icon" title={t("reviews.reply")} onClick={() => setReplying(r)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("reviews.reply")}
+                            aria-label={t("reviews.reply")}
+                            onClick={() => setReplying(r)}
+                          >
                             <Reply className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
                             title={t("reviews.detailTitle")}
+                            aria-label={t("reviews.detailTitle")}
                             onClick={() => setDetail(r)}
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" title={t("common.delete")} onClick={() => setDeleting(r)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("common.delete")}
+                            aria-label={t("common.delete")}
+                            onClick={() => setDeleting(r)}
+                          >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>
@@ -348,7 +387,7 @@ export default function AdminReviewsPage() {
                     variant="outline"
                     size="sm"
                     disabled={moderateMut.isPending}
-                    onClick={() => moderateMut.mutate({ id: detail.id, action: "reject" })}
+                    onClick={() => setRejecting(detail)}
                   >
                     {t("reviews.reject")}
                   </Button>
@@ -381,6 +420,26 @@ export default function AdminReviewsPage() {
               onClick={() => deleting && deleteMut.mutate(deleting.id)}
             >
               {t("common.delete")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reject confirm (§70): says what rejecting does — and that it
+          is reversible, so the button is not feared into non-use. */}
+      <AlertDialog open={!!rejecting} onOpenChange={() => setRejecting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("reviews.rejectTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("reviews.rejectConfirm")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => rejecting && moderateMut.mutate({ id: rejecting.id, action: "reject" })}
+            >
+              {t("reviews.reject")}
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

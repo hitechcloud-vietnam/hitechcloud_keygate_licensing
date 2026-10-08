@@ -57,6 +57,8 @@ export default function PortalWebhooksPage() {
   const [editing, setEditing] = useState<PortalWebhook | null>(null)
   const [deleting, setDeleting] = useState<PortalWebhook | null>(null)
   const [freshSecret, setFreshSecret] = useState<string | null>(null)
+  // Disabling stops deliveries — destructive (§70), so it asks first.
+  const [disabling, setDisabling] = useState<PortalWebhook | null>(null)
 
   const pg = useServerPagination(10)
   const { data, isLoading } = useQuery({
@@ -171,7 +173,7 @@ export default function PortalWebhooksPage() {
                             variant="ghost"
                             size="icon"
                             disabled={toggleMut.isPending && toggleMut.variables?.id === wh.id}
-                            onClick={() => toggleMut.mutate(wh)}
+                            onClick={() => (wh.active ? setDisabling(wh) : toggleMut.mutate(wh))}
                             aria-label={wh.active ? t("webhooks.disable") : t("webhooks.enable")}
                           >
                             <Check className={wh.active ? "h-4 w-4 text-emerald-600" : "h-4 w-4"} />
@@ -249,6 +251,26 @@ export default function PortalWebhooksPage() {
               onClick={() => deleting && deleteMut.mutate(deleting.id)}
             >
               {t("common.delete")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Disable confirm (§70): deliveries stop — the dialog says so
+          before the toggle lands. */}
+      <AlertDialog open={!!disabling} onOpenChange={() => setDisabling(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("webhooks.disableTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("webhooks.disableConfirm")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => disabling && toggleMut.mutate(disabling)}
+            >
+              {t("webhooks.disable")}
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

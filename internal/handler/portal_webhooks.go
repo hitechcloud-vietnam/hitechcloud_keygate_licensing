@@ -7,10 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -29,12 +32,13 @@ import (
 //	POST   /portal/webhooks              Register one (secret returned ONCE)
 //	PATCH  /portal/webhooks/:id          Partial update (url?/events?/active?)
 //	DELETE /portal/webhooks/:id          Hard delete
+//	POST   /portal/webhooks/:id/rotate   Fresh signing secret, shown once
 //	POST   /portal/webhooks/:id/test     Fire a test delivery, report accepted/failed
 //
-// The signing secret is returned exactly once, in the Create answer, and
-// is never recoverable afterwards. Every response's row carries only
-// secret_prefix (a display hint); the full secret is json:"-" on the
-// model and NEVER logged.
+// The signing secret is returned exactly once, in the Create and Rotate
+// answers, and is never recoverable afterwards. Every response's row
+// carries only secret_prefix (a display hint); the full secret is
+// json:"-" on the model and NEVER logged.
 //
 // Identity: middleware.SessionAuth (the /portal group's auth) puts the
 // session user's id into the gin context under "user_id". Every lookup
@@ -43,6 +47,13 @@ import (
 type PortalWebhookHandler struct {
 	store  customerWebhookStore
 	client customerWebhookDoer
+	// lookup resolves a delivery target's host so a name that now points
+	// into loopback / RFC 1918 / CGNAT / metadata space is refused even
+	// when the literal saved at write time was public (DNS changes between
+	// save and delivery). nil means "classify literal addresses only" —
+	// tests that fake the transport leave it unset; the production
+	// constructor always wires the real resolver.
+	lookup func(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
 // customerWebhookStore is the seam this handler needs from the store.
@@ -57,6 +68,7 @@ type customerWebhookStore interface {
 	CountCustomerWebhooksByUser(ctx context.Context, userID string) (int, error)
 	FindCustomerWebhooksForEvent(ctx context.Context, event string) ([]*model.CustomerWebhook, error)
 	TouchCustomerWebhookLastDelivery(ctx context.Context, id string) error
+	RotateCustomerWebhookSecret(ctx context.Context, id, rawSecret string) error
 	Audit(ctx context.Context, log *model.AuditLog)
 }
 
@@ -88,7 +100,11 @@ const customerWebhookTestEvent = "webhook.test"
 // NewPortalWebhookHandler wires the handler to the store. The caller
 // (main.go) passes the concrete *store.Store; tests pass a fake.
 func NewPortalWebhookHandler(s customerWebhookStore) *PortalWebhookHandler {
-	return &PortalWebhookHandler{store: s, client: defaultCustomerWebhookClient()}
+	return &PortalWebhookHandler{
+		store:  s,
+		client: defaultCustomerWebhookClient(),
+		lookup: net.DefaultResolver.LookupIPAddr,
+	}
 }
 
 // defaultCustomerWebhookClient is the delivery client: short timeout so
@@ -136,11 +152,127 @@ func normalizeCustomerWebhook(w *model.CustomerWebhook) error {
 	if err := model.ValidateCustomerWebhookURL(w.URL); err != nil {
 		return apperr.BadRequest(err.Error())
 	}
+	// §61 hardening on top of the model's fast filter: that check is
+	// std-lib-only and misses CGNAT (100.64/10 — where cloud metadata
+	// services like 100.100.100.100 live), the protocol/documentation
+	// blocks, multicast and the IPv4-embedding IPv6 transition ranges.
+	// The write path refuses those too; the message is the model's, so
+	// one policy reads as one policy.
+	if err := guardWebhookLiteralTarget(w.URL); err != nil {
+		return apperr.BadRequest(err.Error())
+	}
 	events, err := model.FoldCustomerWebhookEvents(w.Events)
 	if err != nil {
 		return apperr.BadRequest(err.Error())
 	}
 	w.Events = events
+	return nil
+}
+
+// errWebhookPrivateTarget is the one refusal shared by every webhook
+// target check in this package. Same wording as the model's, so create,
+// update, and the delivery-time guard all read as one policy.
+var errWebhookPrivateTarget = errors.New("url must not point at loopback or private addresses")
+
+// webhookInternalNets is everything a webhook must never be delivered
+// to. It mirrors service.nonPublicNets (the merchant delivery guard)
+// exactly: loopback, RFC 1918, CGNAT (100.64/10 — cloud metadata
+// services live there too), link-local, the IETF/benchmark/documentation
+// blocks, class E, broadcast, and the IPv6 equivalents including the
+// ranges that embed an IPv4 address (NAT64, 6to4). One list, one
+// doctrine — a target refused by the merchant system is refused by the
+// customer system and vice versa.
+var webhookInternalNets = func() []*net.IPNet {
+	cidrs := []string{
+		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+		"169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
+		"192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+		"224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32",
+		"::/128", "::1/128", "64:ff9b::/96", "100::/64", "2001::/32",
+		"2001:db8::/32", "2002::/16", "fc00::/7", "fe80::/10", "ff00::/8",
+	}
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic("webhook: bad cidr " + c)
+		}
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
+// isNonPublicWebhookIP reports whether ip is a target no webhook may be
+// delivered to (see webhookInternalNets). A v4-mapped v6 address is
+// checked as its v4 self. Nil/unparseable fails closed.
+func isNonPublicWebhookIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	for _, n := range webhookInternalNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// guardWebhookLiteralTarget refuses a webhook URL whose HOST is a
+// literal non-public address (or "localhost"). Hostnames pass here and
+// are classified at delivery time — DNS can change between save and
+// send, so the literal check alone is not the authoritative guard.
+func guardWebhookLiteralTarget(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return errWebhookPrivateTarget
+	}
+	if ip := net.ParseIP(host); ip != nil && isNonPublicWebhookIP(ip) {
+		return errWebhookPrivateTarget
+	}
+	return nil
+}
+
+// guardWebhookResolvedTarget is the delivery-time half: literals are
+// re-classified (a row saved before a policy tightening stays refused),
+// and when a resolver is wired the host's ADDRESSES are classified too
+// — closing the DNS-rebinding window between save and send. An
+// unresolvable or address-less name fails closed: "we could not check"
+// is not "safe" (an NXDOMAIN for us can be the metadata service for
+// whatever resolves next).
+func guardWebhookResolvedTarget(ctx context.Context, lookup func(context.Context, string) ([]net.IPAddr, error), raw string) error {
+	if err := guardWebhookLiteralTarget(raw); err != nil {
+		return err
+	}
+	if lookup == nil {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	host := u.Hostname()
+	if net.ParseIP(host) != nil {
+		return nil // literal already classified above
+	}
+	addrs, err := lookup(ctx, host)
+	if err != nil {
+		return errWebhookPrivateTarget
+	}
+	if len(addrs) == 0 {
+		return errWebhookPrivateTarget
+	}
+	for _, a := range addrs {
+		if isNonPublicWebhookIP(a.IP) {
+			return errWebhookPrivateTarget
+		}
+	}
 	return nil
 }
 
@@ -283,6 +415,49 @@ func (h *PortalWebhookHandler) Delete(c *gin.Context) {
 	response.NoContent(c)
 }
 
+// Rotate answers POST /portal/webhooks/:id/rotate with a FRESH signing
+// secret, in the same shape Create answers with
+// ({"webhook": <row>, "secret": "whsec_…"} — 200 instead of 201). The
+// secret is shown ONCE here and is unrecoverable afterwards; the row
+// carries only secret_prefix.
+//
+// Storage goes through the same sealing as creation
+// (crypto.Seal inside store.RotateCustomerWebhookSecret), and the old
+// secret is invalid the moment the write commits: every read path opens
+// what is stored, so the next delivery is signed with the new secret —
+// immediate invalidation, with the single documented edge that a
+// delivery already in flight when the write commits was signed with the
+// secret it read before rotation.
+//
+// Ownership is the same quiet 404 as every other portal write: a
+// cross-user id is indistinguishable from a missing one, so probing
+// someone else's webhook id gains nothing. Never logs the secret; the
+// audit trail records only its display prefix.
+func (h *PortalWebhookHandler) Rotate(c *gin.Context) {
+	wh, ok := h.resolveOwnedWebhook(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	secret, err := model.NewCustomerWebhookSecret()
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	if err := h.store.RotateCustomerWebhookSecret(ctx, wh.ID, secret); err != nil {
+		response.Internal(c, err)
+		return
+	}
+	wh.Secret = secret
+	wh.SecretPrefix = model.CustomerWebhookDisplayPrefix(secret)
+	h.store.Audit(ctx, &model.AuditLog{
+		Entity: "customer_webhook", EntityID: wh.ID, Action: "secret_rotated",
+		ActorType: "portal_user", ActorID: portalUserID(c), IPAddress: c.ClientIP(),
+		Changes: map[string]any{"secret_prefix": wh.SecretPrefix},
+	})
+	response.OK(c, gin.H{"webhook": wh, "secret": secret})
+}
+
 // DispatchTest answers POST /portal/webhooks/:id/test: it fires a signed
 // test delivery at exactly this endpoint and reports whether the
 // endpoint accepted it (2xx). It is synchronous with a short timeout, so
@@ -369,6 +544,15 @@ func (h *PortalWebhookHandler) DispatchCustomerEvent(ctx context.Context, event 
 // completed exchange (any status, including non-2xx) and an error only on
 // a transport failure.
 func (h *PortalWebhookHandler) postDelivery(ctx context.Context, wh *model.CustomerWebhook, event string, data map[string]any) (int, error) {
+	// §61 delivery-time target guard (SSRF): the write-time policy only
+	// saw the URL as saved — a legacy row, or a name whose DNS has moved
+	// since, must not turn this dispatch into a request to the metadata
+	// service or an internal host. Literals are always classified;
+	// resolved addresses too whenever a resolver is wired (production
+	// always has one — NewPortalWebhookHandler sets it).
+	if err := guardWebhookResolvedTarget(ctx, h.lookup, wh.URL); err != nil {
+		return 0, err
+	}
 	payload := map[string]any{
 		"event":     event,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),

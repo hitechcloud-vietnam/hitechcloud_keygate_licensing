@@ -292,7 +292,7 @@ export default function AnalyticsPage() {
               if (v !== "all") setPlanFilter("")
             }}
           >
-            <SelectTrigger className="w-full sm:w-40">
+            <SelectTrigger className="w-full sm:w-40" aria-label={t("common.type")}>
               <SelectValue placeholder={t("filter.allTypes")} />
             </SelectTrigger>
             <SelectContent>
@@ -306,7 +306,7 @@ export default function AnalyticsPage() {
         <div className="space-y-2">
           <Label className="text-xs">{t("common.status")}</Label>
           <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-            <SelectTrigger className="w-full sm:w-40">
+            <SelectTrigger className="w-full sm:w-40" aria-label={t("common.status")}>
               <SelectValue placeholder={t("filter.allStatuses")} />
             </SelectTrigger>
             <SelectContent>

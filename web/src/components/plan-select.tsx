@@ -52,6 +52,7 @@ export function PlanSelect({
       current={current ? { id: current.id, label: current.name, hint: label(current) } : null}
       allLabel={allLabel}
       placeholder={placeholder}
+      label={t("common.plan")}
       searchPlaceholder={t("filter.searchPlans")}
       emptyLabel={t("filter.noMatches")}
       moreLabel={(hidden) => t("filter.moreMatches", { count: hidden })}

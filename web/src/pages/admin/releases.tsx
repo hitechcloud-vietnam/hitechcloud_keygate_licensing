@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { type ChangeEvent, useEffect, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
+import { ExportCsvButton } from "@/components/export-csv"
 import { ProductSelect } from "@/components/product-select"
 import { showToast, toastError } from "@/components/toast"
 import {
@@ -193,6 +194,25 @@ export default function ReleasesPage() {
           <p className="text-muted-foreground">{t("releases.subtitle")}</p>
         </div>
         <div className="flex gap-2">
+          <ExportCsvButton
+            filename="releases"
+            columns={[
+              t("common.product"),
+              t("releases.version"),
+              t("releases.channel"),
+              t("releases.platforms"),
+              t("common.status"),
+              t("common.created"),
+            ]}
+            rows={releases.map((rel) => [
+              rel.product?.name || rel.product_id,
+              rel.version,
+              rel.channel,
+              (rel.artifacts || []).length,
+              rel.status,
+              formatDate(rel.created_at),
+            ])}
+          />
           <Button variant="outline" onClick={() => setSettings({ productId: productFilter, tab: "signing" })}>
             <Settings2 className="h-4 w-4 mr-2" /> {t("releases.updateSettings")}
           </Button>
@@ -210,7 +230,7 @@ export default function ReleasesPage() {
           types={RELEASE_PRODUCT_TYPES}
         />
         <Select value={channelFilter || "all"} onValueChange={(v) => setChannelFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-36">
+          <SelectTrigger className="w-36" aria-label={t("releases.channel")}>
             <SelectValue placeholder={t("releases.allChannels")} />
           </SelectTrigger>
           <SelectContent>
@@ -223,7 +243,7 @@ export default function ReleasesPage() {
           </SelectContent>
         </Select>
         <Select value={statusFilter || "all"} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-36">
+          <SelectTrigger className="w-36" aria-label={t("common.status")}>
             <SelectValue placeholder={t("releases.allStatuses")} />
           </SelectTrigger>
           <SelectContent>

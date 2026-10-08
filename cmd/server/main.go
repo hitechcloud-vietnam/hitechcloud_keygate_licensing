@@ -1256,6 +1256,9 @@ func main() {
 		portal.PATCH("/webhooks/:id", portalWebhookH.Update)
 		portal.DELETE("/webhooks/:id", portalWebhookH.Delete)
 		portal.POST("/webhooks/:id/test", portalWebhookH.DispatchTest)
+		// Customer secret rotation (plan §35): new secret shown once,
+		// the old one stops signing the moment the write commits.
+		portal.POST("/webhooks/:id/rotate", portalWebhookH.Rotate)
 
 		// Customer-facing event fan-out (plan §35/§44): every
 		// lifecycle event emitted at the call sites reaches the
@@ -1326,7 +1329,7 @@ func main() {
 	licWrite := v1.Group("/admin", licWriteMW...)
 	relWrite := v1.Group("/admin", relWriteMW...)
 	{
-		admin.GET("/stats", adminH.Stats)
+		admin.GET("/stats", middleware.RequirePermission(model.PermReportsRead, db), adminH.Stats)
 
 		// Business reporting (plan §43): read-only aggregations with
 		// CSV/JSON export. reports.read is the natural gate — finance
@@ -1337,135 +1340,149 @@ func main() {
 		reports.GET("/:type", reportsAdminH.Get)
 		reports.GET("/:type/export", reportsAdminH.Export)
 
-		admin.GET("/products", adminH.ListProducts)
-		admin.GET("/products/:id", adminH.GetProduct)
-		admin.POST("/products", adminH.CreateProduct)
-		admin.PUT("/products/:id", adminH.UpdateProduct)
-		admin.PUT("/products/:id/categories", adminH.SetProductCategories)
-		admin.DELETE("/products/:id", adminH.DeleteProduct)
+		// Per-route permission gates (plan §8 rollout): each route names
+		// the granular permission that authorizes it. Admission is still
+		// SessionOrAPIKey(admin) — is_admin keeps its wildcard passthrough,
+		// API-key routes keep RequireScope — so these gates enforce the
+		// mapping for role sessions as soon as admin admission is relaxed
+		// to role holders (the next rollout step).
+		admin.GET("/products", middleware.RequirePermission(model.PermProductsRead, db), adminH.ListProducts)
+		admin.GET("/products/:id", middleware.RequirePermission(model.PermProductsRead, db), adminH.GetProduct)
+		admin.POST("/products", middleware.RequirePermission(model.PermProductsCreate, db), adminH.CreateProduct)
+		admin.PUT("/products/:id", middleware.RequirePermission(model.PermProductsUpdate, db), adminH.UpdateProduct)
+		admin.PUT("/products/:id/categories", middleware.RequirePermission(model.PermProductsUpdate, db), adminH.SetProductCategories)
+		admin.DELETE("/products/:id", middleware.RequirePermission(model.PermProductsDelete, db), adminH.DeleteProduct)
 
-		admin.GET("/plans", adminH.ListPlans)
-		admin.GET("/plans/:id", adminH.GetPlan)
-		admin.POST("/plans", adminH.CreatePlan)
-		admin.PUT("/plans/:id", adminH.UpdatePlan)
-		admin.DELETE("/plans/:id", adminH.DeletePlan)
+		admin.GET("/plans", middleware.RequirePermission(model.PermPlansRead, db), adminH.ListPlans)
+		admin.GET("/plans/:id", middleware.RequirePermission(model.PermPlansRead, db), adminH.GetPlan)
+		admin.POST("/plans", middleware.RequirePermission(model.PermPlansCreate, db), adminH.CreatePlan)
+		admin.PUT("/plans/:id", middleware.RequirePermission(model.PermPlansUpdate, db), adminH.UpdatePlan)
+		admin.DELETE("/plans/:id", middleware.RequirePermission(model.PermPlansDelete, db), adminH.DeletePlan)
 
-		admin.POST("/entitlements", adminH.CreateEntitlement)
-		admin.PUT("/entitlements/:id", adminH.UpdateEntitlement)
-		admin.DELETE("/entitlements/:id", adminH.DeleteEntitlement)
+		admin.POST("/entitlements", middleware.RequirePermission(model.PermPlansCreate, db), adminH.CreateEntitlement)
+		admin.PUT("/entitlements/:id", middleware.RequirePermission(model.PermPlansUpdate, db), adminH.UpdateEntitlement)
+		admin.DELETE("/entitlements/:id", middleware.RequirePermission(model.PermPlansDelete, db), adminH.DeleteEntitlement)
 
 		// ─── License CRUD + lifecycle: also reachable by licenses:write keys ───
-		licWrite.GET("/licenses", adminH.ListLicenses)
-		licWrite.GET("/licenses/export", adminH.ExportLicenses)
-		licWrite.GET("/licenses/:id", adminH.GetLicense)
-		licWrite.GET("/licenses/:id/key", adminH.RevealLicenseKey)
+		licWrite.GET("/licenses", middleware.RequirePermission(model.PermLicensesRead, db), adminH.ListLicenses)
+		licWrite.GET("/licenses/export", middleware.RequirePermission(model.PermLicensesRead, db), adminH.ExportLicenses)
+		licWrite.GET("/licenses/:id", middleware.RequirePermission(model.PermLicensesRead, db), adminH.GetLicense)
+		licWrite.GET("/licenses/:id/key", middleware.RequirePermission(model.PermLicensesRead, db), adminH.RevealLicenseKey)
 		// Mails the key to the address on the licence, for a send
 		// that never arrived. Recipient is not caller-supplied.
-		licWrite.POST("/licenses/:id/resend-email", adminH.ResendLicenseEmail)
-		licWrite.POST("/licenses", adminH.CreateLicense)
-		licWrite.POST("/licenses/:id/refund", adminH.RefundLicense)
-		licWrite.POST("/licenses/:id/revoke", adminH.RevokeLicense)
-		licWrite.POST("/licenses/:id/suspend", adminH.SuspendLicense)
-		licWrite.POST("/licenses/:id/reinstate", adminH.ReinstateLicense)
-		licWrite.POST("/licenses/:id/valid-until", adminH.SetLicenseValidUntil)
-		licWrite.POST("/licenses/:id/updates-until", adminH.SetLicenseUpdatesUntil)
-		licWrite.POST("/licenses/:id/change-plan", adminH.ChangeLicensePlan)
+		licWrite.POST("/licenses/:id/resend-email", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.ResendLicenseEmail)
+		licWrite.POST("/licenses", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.CreateLicense)
+		licWrite.POST("/licenses/:id/refund", middleware.RequirePermission(model.PermOrdersRefund, db), adminH.RefundLicense)
+		licWrite.POST("/licenses/:id/revoke", middleware.RequirePermission(model.PermLicensesRevoke, db), adminH.RevokeLicense)
+		licWrite.POST("/licenses/:id/suspend", middleware.RequirePermission(model.PermLicensesDeactivate, db), adminH.SuspendLicense)
+		licWrite.POST("/licenses/:id/reinstate", middleware.RequirePermission(model.PermLicensesActivate, db), adminH.ReinstateLicense)
+		licWrite.POST("/licenses/:id/valid-until", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.SetLicenseValidUntil)
+		licWrite.POST("/licenses/:id/updates-until", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.SetLicenseUpdatesUntil)
+		licWrite.POST("/licenses/:id/change-plan", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.ChangeLicensePlan)
 		// Cuts a licence loose from a subscription Stripe has
 		// finished with, so it can be managed locally again.
-		licWrite.POST("/licenses/:id/stripe/unlink", adminH.UnlinkStripeSubscription)
-		licWrite.GET("/licenses/:id/usage", adminH.ListLicenseUsage)
-		licWrite.POST("/licenses/:id/usage/reset", adminH.ResetLicenseUsage)
-		licWrite.GET("/licenses/:id/seats", adminH.ListLicenseSeats)
+		licWrite.POST("/licenses/:id/stripe/unlink", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.UnlinkStripeSubscription)
+		licWrite.GET("/licenses/:id/usage", middleware.RequirePermission(model.PermLicensesRead, db), adminH.ListLicenseUsage)
+		licWrite.POST("/licenses/:id/usage/reset", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.ResetLicenseUsage)
+		licWrite.GET("/licenses/:id/seats", middleware.RequirePermission(model.PermLicensesRead, db), adminH.ListLicenseSeats)
 
-		licWrite.GET("/licenses/:id/addons", adminH.ListLicenseAddons)
-		licWrite.POST("/licenses/:id/addons", adminH.AddLicenseAddon)
-		licWrite.DELETE("/licenses/:id/addons/:addon_id", adminH.RemoveLicenseAddon)
-		licWrite.GET("/licenses/:id/floating", adminH.ListFloatingSessions)
+		licWrite.GET("/licenses/:id/addons", middleware.RequirePermission(model.PermLicensesRead, db), adminH.ListLicenseAddons)
+		licWrite.POST("/licenses/:id/addons", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.AddLicenseAddon)
+		licWrite.DELETE("/licenses/:id/addons/:addon_id", middleware.RequirePermission(model.PermLicensesCreate, db), adminH.RemoveLicenseAddon)
+		licWrite.GET("/licenses/:id/floating", middleware.RequirePermission(model.PermLicensesRead, db), adminH.ListFloatingSessions)
 
-		licWrite.DELETE("/activations/:id", adminH.DeleteActivation)
+		licWrite.DELETE("/activations/:id", middleware.RequirePermission(model.PermLicensesDeactivate, db), adminH.DeleteActivation)
 
-		admin.GET("/api-keys", adminH.ListAPIKeys)
-		admin.POST("/api-keys", adminH.CreateAPIKey)
-		admin.POST("/api-keys/:id/rotate", adminH.RotateAPIKey)
-		admin.DELETE("/api-keys/:id", adminH.DeleteAPIKey)
+		admin.GET("/api-keys", middleware.RequirePermission(model.PermSettingsManage, db), adminH.ListAPIKeys)
+		admin.POST("/api-keys", middleware.RequirePermission(model.PermSettingsManage, db), adminH.CreateAPIKey)
+		admin.POST("/api-keys/:id/rotate", middleware.RequirePermission(model.PermSettingsManage, db), adminH.RotateAPIKey)
+		admin.DELETE("/api-keys/:id", middleware.RequirePermission(model.PermSettingsManage, db), adminH.DeleteAPIKey)
 
-		admin.GET("/webhooks", webhookAdminH.ListWebhooks)
-		admin.POST("/webhooks", webhookAdminH.CreateWebhook)
-		admin.PUT("/webhooks/:id", webhookAdminH.UpdateWebhook)
-		admin.DELETE("/webhooks/:id", webhookAdminH.DeleteWebhook)
-		admin.GET("/webhooks/:id/deliveries", webhookAdminH.ListDeliveries)
-		admin.GET("/webhooks/:id/deliveries/:delivery_id", webhookAdminH.GetDelivery)
-		admin.POST("/webhooks/:id/deliveries/:delivery_id/resend", webhookAdminH.ResendDelivery)
-		admin.POST("/webhooks/:id/test", webhookAdminH.TestWebhook)
+		admin.GET("/webhooks", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.ListWebhooks)
+		admin.POST("/webhooks", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.CreateWebhook)
+		admin.PUT("/webhooks/:id", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.UpdateWebhook)
+		admin.DELETE("/webhooks/:id", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.DeleteWebhook)
+		admin.GET("/webhooks/:id/deliveries", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.ListDeliveries)
+		admin.GET("/webhooks/:id/deliveries/:delivery_id", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.GetDelivery)
+		admin.POST("/webhooks/:id/deliveries/:delivery_id/resend", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.ResendDelivery)
+		admin.POST("/webhooks/:id/test", middleware.RequirePermission(model.PermSettingsManage, db), webhookAdminH.TestWebhook)
+		// Webhook replay + secret rotation (plan §35 tail): re-send a
+		// stored delivery byte-identically (marked X-HiTechCloud-Replay),
+		// or rotate the signing secret (shown once, immediate effect).
+		webhookReplayH := handler.NewWebhookReplayHandler(db, webhookSvc)
+		admin.POST("/webhooks/:id/deliveries/:delivery_id/replay", middleware.RequirePermission(model.PermSettingsManage, db), webhookReplayH.ReplayDelivery)
+		admin.POST("/webhooks/:id/rotate", middleware.RequirePermission(model.PermSettingsManage, db), webhookReplayH.RotateSecret)
 
-		admin.GET("/addons", adminH.ListAddons)
-		admin.POST("/addons", adminH.CreateAddon)
-		admin.PUT("/addons/:id", adminH.UpdateAddon)
-		admin.DELETE("/addons/:id", adminH.DeleteAddon)
+		admin.GET("/addons", middleware.RequirePermission(model.PermProductsRead, db), adminH.ListAddons)
+		admin.POST("/addons", middleware.RequirePermission(model.PermProductsCreate, db), adminH.CreateAddon)
+		admin.PUT("/addons/:id", middleware.RequirePermission(model.PermProductsUpdate, db), adminH.UpdateAddon)
+		admin.DELETE("/addons/:id", middleware.RequirePermission(model.PermProductsDelete, db), adminH.DeleteAddon)
 
 		// ─── Commerce: coupons, tax rates, orders ───
-		admin.GET("/coupons", couponAdminH.List)
-		admin.GET("/coupons/:id", couponAdminH.Get)
-		admin.POST("/coupons", couponAdminH.Create)
-		admin.PUT("/coupons/:id", couponAdminH.Update)
-		admin.DELETE("/coupons/:id", couponAdminH.Delete)
+		admin.GET("/coupons", middleware.RequirePermission(model.PermPaymentsRead, db), couponAdminH.List)
+		admin.GET("/coupons/:id", middleware.RequirePermission(model.PermPaymentsRead, db), couponAdminH.Get)
+		admin.POST("/coupons", middleware.RequirePermission(model.PermPaymentsManage, db), couponAdminH.Create)
+		admin.PUT("/coupons/:id", middleware.RequirePermission(model.PermPaymentsManage, db), couponAdminH.Update)
+		admin.DELETE("/coupons/:id", middleware.RequirePermission(model.PermPaymentsManage, db), couponAdminH.Delete)
 
-		admin.GET("/tax-rates", taxAdminH.List)
-		admin.GET("/tax-rates/:id", taxAdminH.Get)
-		admin.POST("/tax-rates", taxAdminH.Create)
-		admin.PATCH("/tax-rates/:id", taxAdminH.Update)
-		admin.DELETE("/tax-rates/:id", taxAdminH.Delete)
+		admin.GET("/tax-rates", middleware.RequirePermission(model.PermPaymentsRead, db), taxAdminH.List)
+		admin.GET("/tax-rates/:id", middleware.RequirePermission(model.PermPaymentsRead, db), taxAdminH.Get)
+		admin.POST("/tax-rates", middleware.RequirePermission(model.PermPaymentsManage, db), taxAdminH.Create)
+		admin.PATCH("/tax-rates/:id", middleware.RequirePermission(model.PermPaymentsManage, db), taxAdminH.Update)
+		admin.DELETE("/tax-rates/:id", middleware.RequirePermission(model.PermPaymentsManage, db), taxAdminH.Delete)
 
-		admin.GET("/orders", orderAdminH.List)
-		admin.GET("/orders/:id", orderAdminH.Get)
-		admin.POST("/orders/:id/refund", orderAdminH.Refund)
-		admin.GET("/orders/:id/invoices", orderAdminH.ListInvoices)
+		admin.GET("/orders", middleware.RequirePermission(model.PermOrdersRead, db), orderAdminH.List)
+		admin.GET("/orders/:id", middleware.RequirePermission(model.PermOrdersRead, db), orderAdminH.Get)
+		admin.POST("/orders/:id/refund", middleware.RequirePermission(model.PermOrdersRefund, db), orderAdminH.Refund)
+		admin.GET("/orders/:id/invoices", middleware.RequirePermission(model.PermOrdersRead, db), orderAdminH.ListInvoices)
 		// PO / invoice workflow (Phase 8 slice): billing block, guarded
 		// invoice state transitions (paid → void is refused; refund first).
-		admin.PATCH("/orders/:id/billing", orderAdminH.UpdateBilling)
-		admin.POST("/orders/:id/invoices/:invoice_id/void", orderAdminH.Void)
-		admin.POST("/orders/:id/invoices/:invoice_id/mark-uncollectible", orderAdminH.MarkUncollectible)
+		admin.PATCH("/orders/:id/billing", middleware.RequirePermission(model.PermOrdersCreate, db), orderAdminH.UpdateBilling)
+		admin.POST("/orders/:id/invoices/:invoice_id/void", middleware.RequirePermission(model.PermPaymentsManage, db), orderAdminH.Void)
+		admin.POST("/orders/:id/invoices/:invoice_id/mark-uncollectible", middleware.RequirePermission(model.PermPaymentsManage, db), orderAdminH.MarkUncollectible)
 		// Order price preview (no persistence). Registered outside /orders/:id
 		// because gin cannot mix a static segment with a param sibling.
-		admin.POST("/quotes", orderAdminH.Preview)
+		admin.POST("/quotes", middleware.RequirePermission(model.PermOrdersRead, db), orderAdminH.Preview)
 
 		// Marketplace catalog (Phase 6): categories + product tagging.
-		admin.GET("/categories", categoryAdminH.List)
-		admin.GET("/categories/:id", categoryAdminH.Get)
-		admin.POST("/categories", categoryAdminH.Create)
-		admin.PATCH("/categories/:id", categoryAdminH.Update)
-		admin.DELETE("/categories/:id", categoryAdminH.Delete)
+		admin.GET("/categories", middleware.RequirePermission(model.PermProductsRead, db), categoryAdminH.List)
+		admin.GET("/categories/:id", middleware.RequirePermission(model.PermProductsRead, db), categoryAdminH.Get)
+		admin.POST("/categories", middleware.RequirePermission(model.PermProductsCreate, db), categoryAdminH.Create)
+		admin.PATCH("/categories/:id", middleware.RequirePermission(model.PermProductsUpdate, db), categoryAdminH.Update)
+		admin.DELETE("/categories/:id", middleware.RequirePermission(model.PermProductsDelete, db), categoryAdminH.Delete)
 
 		// Product review moderation (Phase 6).
 		reviewAdminH := handler.NewReviewAdminHandler(db)
-		admin.GET("/reviews", reviewAdminH.List)
-		admin.GET("/reviews/:id", reviewAdminH.Get)
-		admin.POST("/reviews/:id/approve", reviewAdminH.Approve)
-		admin.POST("/reviews/:id/reject", reviewAdminH.Reject)
-		admin.PUT("/reviews/:id/reply", reviewAdminH.Reply)
-		admin.DELETE("/reviews/:id", reviewAdminH.Delete)
+		admin.GET("/reviews", middleware.RequirePermission(model.PermProductsRead, db), reviewAdminH.List)
+		admin.GET("/reviews/:id", middleware.RequirePermission(model.PermProductsRead, db), reviewAdminH.Get)
+		admin.POST("/reviews/:id/approve", middleware.RequirePermission(model.PermProductsUpdate, db), reviewAdminH.Approve)
+		admin.POST("/reviews/:id/reject", middleware.RequirePermission(model.PermProductsUpdate, db), reviewAdminH.Reject)
+		admin.PUT("/reviews/:id/reply", middleware.RequirePermission(model.PermProductsUpdate, db), reviewAdminH.Reply)
+		admin.DELETE("/reviews/:id", middleware.RequirePermission(model.PermProductsDelete, db), reviewAdminH.Delete)
 
 		// Enterprise SSO + SCIM (Phase 8 slice 1): configuration and
 		// provisioning tokens only — SAML/OIDC handshakes, SCIM sync
 		// endpoints and token middleware are documented future work.
 		ssoAdminH := handler.NewSSOAdminHandler(db)
-		admin.GET("/sso/connections", ssoAdminH.List)
-		admin.POST("/sso/connections", ssoAdminH.Create)
-		admin.GET("/sso/connections/:id", ssoAdminH.Get)
-		admin.PATCH("/sso/connections/:id", ssoAdminH.Update)
-		admin.DELETE("/sso/connections/:id", ssoAdminH.Delete)
-		admin.POST("/sso/connections/:id/enable", ssoAdminH.Enable)
-		admin.POST("/sso/connections/:id/disable", ssoAdminH.Disable)
-		admin.GET("/sso/tokens", ssoAdminH.ListTokens)
-		admin.POST("/sso/tokens", ssoAdminH.CreateToken)
-		admin.POST("/sso/tokens/:id/revoke", ssoAdminH.RevokeToken)
-		admin.DELETE("/sso/tokens/:id", ssoAdminH.DeleteToken)
+		admin.GET("/sso/connections", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.List)
+		admin.POST("/sso/connections", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.Create)
+		admin.GET("/sso/connections/:id", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.Get)
+		admin.PATCH("/sso/connections/:id", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.Update)
+		admin.DELETE("/sso/connections/:id", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.Delete)
+		admin.POST("/sso/connections/:id/enable", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.Enable)
+		admin.POST("/sso/connections/:id/disable", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.Disable)
+		admin.GET("/sso/tokens", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.ListTokens)
+		admin.POST("/sso/tokens", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.CreateToken)
+		admin.POST("/sso/tokens/:id/revoke", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.RevokeToken)
+		admin.DELETE("/sso/tokens/:id", middleware.RequirePermission(model.PermSettingsManage, db), ssoAdminH.DeleteToken)
 
 		// Advanced RBAC (Phase 8, plan §8): custom roles + granular
-		// permissions. Role admin is a settings-level action. Existing
-		// admin routes keep their is_admin gate (wildcard passthrough in
-		// RequirePermission); per-route permission gates are a follow-up
-		// rollout — see ExpandBuiltinRole for the mapping.
+		// permissions. Role admin is a settings-level action. Per-route
+		// RequirePermission gates now cover the admin surface (mapping
+		// mirrors ExpandBuiltinRole); is_admin keeps wildcard pass-
+		// through and API-key routes keep RequireScope. Remaining
+		// rollout step: relax SessionOrAPIKey(admin) admission to role
+		// holders — the gates are ready for it.
 		rbacAdminH := handler.NewRBACAdminHandler(db)
 		rbac := admin.Group("/rbac", middleware.RequirePermission(model.PermSettingsManage, db))
 		rbac.GET("/permissions", rbacAdminH.Permissions)
@@ -1481,96 +1498,98 @@ func main() {
 
 		// Reseller foundation (Phase 7): accounts + licence allocation.
 		resellerAdminH := handler.NewResellerAdminHandler(db)
-		admin.GET("/resellers", resellerAdminH.List)
-		admin.POST("/resellers", resellerAdminH.Create)
-		admin.GET("/resellers/:id", resellerAdminH.Get)
-		admin.PATCH("/resellers/:id", resellerAdminH.Update)
-		admin.DELETE("/resellers/:id", resellerAdminH.Delete)
-		admin.GET("/resellers/:id/licenses", resellerAdminH.ListLicenses)
-		admin.POST("/resellers/:id/licenses", resellerAdminH.AllocateLicense)
-		admin.DELETE("/resellers/:id/licenses/:license_id", resellerAdminH.DeallocateLicense)
+		admin.GET("/resellers", middleware.RequirePermission(model.PermCustomersRead, db), resellerAdminH.List)
+		admin.POST("/resellers", middleware.RequirePermission(model.PermCustomersManage, db), resellerAdminH.Create)
+		admin.GET("/resellers/:id", middleware.RequirePermission(model.PermCustomersRead, db), resellerAdminH.Get)
+		admin.PATCH("/resellers/:id", middleware.RequirePermission(model.PermCustomersManage, db), resellerAdminH.Update)
+		admin.DELETE("/resellers/:id", middleware.RequirePermission(model.PermCustomersManage, db), resellerAdminH.Delete)
+		admin.GET("/resellers/:id/licenses", middleware.RequirePermission(model.PermCustomersRead, db), resellerAdminH.ListLicenses)
+		admin.POST("/resellers/:id/licenses", middleware.RequirePermission(model.PermCustomersManage, db), resellerAdminH.AllocateLicense)
+		admin.DELETE("/resellers/:id/licenses/:license_id", middleware.RequirePermission(model.PermCustomersManage, db), resellerAdminH.DeallocateLicense)
 		// Reseller commissions + wholesale pricing (Phase 7 slice 2).
-		admin.GET("/resellers/:id/commissions", resellerAdminH.ListCommissions)
-		admin.POST("/resellers/:id/commissions", resellerAdminH.AccrueCommission)
-		admin.POST("/resellers/:id/commissions/:commission_id/paid", resellerAdminH.MarkCommissionPaid)
-		admin.GET("/resellers/:id/prices", resellerAdminH.ListPriceOverrides)
-		admin.PUT("/resellers/:id/prices/:plan_id", resellerAdminH.SetPriceOverride)
-		admin.DELETE("/resellers/:id/prices/:plan_id", resellerAdminH.DeletePriceOverride)
+		admin.GET("/resellers/:id/commissions", middleware.RequirePermission(model.PermPaymentsRead, db), resellerAdminH.ListCommissions)
+		admin.POST("/resellers/:id/commissions", middleware.RequirePermission(model.PermPaymentsManage, db), resellerAdminH.AccrueCommission)
+		admin.POST("/resellers/:id/commissions/:commission_id/paid", middleware.RequirePermission(model.PermPaymentsManage, db), resellerAdminH.MarkCommissionPaid)
+		admin.GET("/resellers/:id/prices", middleware.RequirePermission(model.PermPaymentsRead, db), resellerAdminH.ListPriceOverrides)
+		admin.PUT("/resellers/:id/prices/:plan_id", middleware.RequirePermission(model.PermPaymentsManage, db), resellerAdminH.SetPriceOverride)
+		admin.DELETE("/resellers/:id/prices/:plan_id", middleware.RequirePermission(model.PermPaymentsManage, db), resellerAdminH.DeletePriceOverride)
 
 		// Affiliate program (Phase 7): accounts, referral codes,
 		// conversion review, payouts.
 		affiliateAdminH := handler.NewAffiliateAdminHandler(db)
-		admin.GET("/affiliates", affiliateAdminH.List)
-		admin.POST("/affiliates", affiliateAdminH.Create)
-		admin.GET("/affiliates/:id", affiliateAdminH.Get)
-		admin.PATCH("/affiliates/:id", affiliateAdminH.Update)
-		admin.DELETE("/affiliates/:id", affiliateAdminH.Delete)
-		admin.GET("/affiliates/:id/codes", affiliateAdminH.ListCodes)
-		admin.POST("/affiliates/:id/codes", affiliateAdminH.CreateCode)
-		admin.PATCH("/affiliates/:id/codes/:code_id", affiliateAdminH.UpdateCode)
-		admin.DELETE("/affiliates/:id/codes/:code_id", affiliateAdminH.DeleteCode)
-		admin.GET("/affiliates/:id/conversions", affiliateAdminH.ListConversions)
-		admin.GET("/affiliates/:id/payouts", affiliateAdminH.ListPayouts)
-		admin.POST("/affiliates/:id/payouts", affiliateAdminH.CreatePayout)
-		admin.POST("/conversions/:id/approve", affiliateAdminH.Approve)
-		admin.POST("/conversions/:id/reject", affiliateAdminH.Reject)
-		admin.POST("/conversions/:id/reverse", affiliateAdminH.Reverse)
-		admin.POST("/payouts/:id/paid", affiliateAdminH.MarkPaid)
-		admin.POST("/payouts/:id/failed", affiliateAdminH.MarkFailed)
+		admin.GET("/affiliates", middleware.RequirePermission(model.PermCustomersRead, db), affiliateAdminH.List)
+		admin.POST("/affiliates", middleware.RequirePermission(model.PermCustomersManage, db), affiliateAdminH.Create)
+		admin.GET("/affiliates/:id", middleware.RequirePermission(model.PermCustomersRead, db), affiliateAdminH.Get)
+		admin.PATCH("/affiliates/:id", middleware.RequirePermission(model.PermCustomersManage, db), affiliateAdminH.Update)
+		admin.DELETE("/affiliates/:id", middleware.RequirePermission(model.PermCustomersManage, db), affiliateAdminH.Delete)
+		admin.GET("/affiliates/:id/codes", middleware.RequirePermission(model.PermCustomersRead, db), affiliateAdminH.ListCodes)
+		admin.POST("/affiliates/:id/codes", middleware.RequirePermission(model.PermCustomersManage, db), affiliateAdminH.CreateCode)
+		admin.PATCH("/affiliates/:id/codes/:code_id", middleware.RequirePermission(model.PermCustomersManage, db), affiliateAdminH.UpdateCode)
+		admin.DELETE("/affiliates/:id/codes/:code_id", middleware.RequirePermission(model.PermCustomersManage, db), affiliateAdminH.DeleteCode)
+		admin.GET("/affiliates/:id/conversions", middleware.RequirePermission(model.PermPaymentsRead, db), affiliateAdminH.ListConversions)
+		admin.GET("/affiliates/:id/payouts", middleware.RequirePermission(model.PermPaymentsRead, db), affiliateAdminH.ListPayouts)
+		admin.POST("/affiliates/:id/payouts", middleware.RequirePermission(model.PermPaymentsManage, db), affiliateAdminH.CreatePayout)
+		admin.POST("/conversions/:id/approve", middleware.RequirePermission(model.PermPaymentsManage, db), affiliateAdminH.Approve)
+		admin.POST("/conversions/:id/reject", middleware.RequirePermission(model.PermPaymentsManage, db), affiliateAdminH.Reject)
+		admin.POST("/conversions/:id/reverse", middleware.RequirePermission(model.PermPaymentsManage, db), affiliateAdminH.Reverse)
+		admin.POST("/payouts/:id/paid", middleware.RequirePermission(model.PermPaymentsManage, db), affiliateAdminH.MarkPaid)
+		admin.POST("/payouts/:id/failed", middleware.RequirePermission(model.PermPaymentsManage, db), affiliateAdminH.MarkFailed)
 
-		admin.GET("/settings", adminH.GetSettings)
-		admin.PUT("/settings", adminH.UpdateSettings)
-		admin.DELETE("/settings/secrets/:key", adminH.ClearSecretSetting)
-		admin.POST("/settings/test-email", adminH.SendTestEmail)
-		admin.POST("/system/run-expiry-checks", adminH.RunExpiryChecks)
-		admin.POST("/system/run-metered-sync", adminH.RunMeteredSync)
-		admin.GET("/email-templates", adminH.GetEmailTemplates)
+		admin.GET("/settings", middleware.RequirePermission(model.PermSettingsManage, db), adminH.GetSettings)
+		admin.PUT("/settings", middleware.RequirePermission(model.PermSettingsManage, db), adminH.UpdateSettings)
+		admin.DELETE("/settings/secrets/:key", middleware.RequirePermission(model.PermSettingsManage, db), adminH.ClearSecretSetting)
+		admin.POST("/settings/test-email", middleware.RequirePermission(model.PermSettingsManage, db), adminH.SendTestEmail)
+		admin.POST("/system/run-expiry-checks", middleware.RequirePermission(model.PermSettingsManage, db), adminH.RunExpiryChecks)
+		admin.POST("/system/run-metered-sync", middleware.RequirePermission(model.PermSettingsManage, db), adminH.RunMeteredSync)
+		admin.GET("/email-templates", middleware.RequirePermission(model.PermSettingsManage, db), adminH.GetEmailTemplates)
 
-		admin.GET("/team", adminH.ListTeamMembers)
-		admin.POST("/team", adminH.InviteTeamMember)
-		admin.DELETE("/team/:id", adminH.RemoveTeamMember)
+		admin.GET("/team", middleware.RequirePermission(model.PermSettingsManage, db), adminH.ListTeamMembers)
+		admin.POST("/team", middleware.RequirePermission(model.PermSettingsManage, db), adminH.InviteTeamMember)
+		admin.DELETE("/team/:id", middleware.RequirePermission(model.PermSettingsManage, db), adminH.RemoveTeamMember)
 
-		admin.GET("/system/update-check", systemH.CheckUpdate)
-		admin.GET("/system/migrations", systemH.GetMigrationStatus)
+		admin.GET("/system/update-check", middleware.RequirePermission(model.PermSettingsManage, db), systemH.CheckUpdate)
+		admin.GET("/system/migrations", middleware.RequirePermission(model.PermSettingsManage, db), systemH.GetMigrationStatus)
 
-		admin.GET("/analytics", adminH.ListAnalytics)
-		admin.GET("/analytics/summary", adminH.AnalyticsSummary)
-		admin.GET("/analytics/breakdown", adminH.AnalyticsBreakdown)
-		admin.GET("/analytics/usage-top", adminH.AnalyticsUsageTop)
-		admin.GET("/analytics/activation-trend", adminH.AnalyticsActivationTrend)
-		admin.GET("/analytics/insights", adminH.AnalyticsInsights)
-		admin.GET("/audit-logs", adminH.ListAuditLogs)
-		admin.GET("/users", adminH.ListUsers)
-		admin.GET("/users/:id", adminH.GetUserDetail)
+		admin.GET("/analytics", middleware.RequirePermission(model.PermReportsRead, db), adminH.ListAnalytics)
+		admin.GET("/analytics/summary", middleware.RequirePermission(model.PermReportsRead, db), adminH.AnalyticsSummary)
+		admin.GET("/analytics/breakdown", middleware.RequirePermission(model.PermReportsRead, db), adminH.AnalyticsBreakdown)
+		admin.GET("/analytics/usage-top", middleware.RequirePermission(model.PermReportsRead, db), adminH.AnalyticsUsageTop)
+		admin.GET("/analytics/activation-trend", middleware.RequirePermission(model.PermReportsRead, db), adminH.AnalyticsActivationTrend)
+		admin.GET("/analytics/insights", middleware.RequirePermission(model.PermReportsRead, db), adminH.AnalyticsInsights)
+		admin.GET("/audit-logs", middleware.RequirePermission(model.PermAuditRead, db), adminH.ListAuditLogs)
+		admin.GET("/users", middleware.RequirePermission(model.PermCustomersRead, db), adminH.ListUsers)
+		admin.GET("/users/:id", middleware.RequirePermission(model.PermCustomersRead, db), adminH.GetUserDetail)
 
 		// ─── Releases (industry-standard bundle model) ───
 		// Resource: release with multiple platform artifacts (mirrors
 		// GitHub Releases / Keygen). Action endpoints under /actions/.
 		// Reachable by `releases:write` keys so CI/CD can ship builds
 		// without holding the admin wildcard.
-		relWrite.GET("/releases", releaseAdminH.List)
-		relWrite.GET("/releases/:id", releaseAdminH.Get)
-		relWrite.POST("/releases", releaseAdminH.Create)
-		relWrite.PATCH("/releases/:id", releaseAdminH.Update)
+		relWrite.GET("/releases", middleware.RequirePermission(model.PermProductsRead, db), releaseAdminH.List)
+		relWrite.GET("/releases/:id", middleware.RequirePermission(model.PermProductsRead, db), releaseAdminH.Get)
+		relWrite.POST("/releases", middleware.RequirePermission(model.PermProductsCreate, db), releaseAdminH.Create)
+		relWrite.PATCH("/releases/:id", middleware.RequirePermission(model.PermProductsUpdate, db), releaseAdminH.Update)
 		// Backward-compat shim: old PATCH /releases/:id/notes — drop after one cycle.
-		relWrite.PATCH("/releases/:id/notes", releaseAdminH.Update)
-		relWrite.DELETE("/releases/:id", releaseAdminH.Delete)
+		relWrite.PATCH("/releases/:id/notes", middleware.RequirePermission(model.PermProductsUpdate, db), releaseAdminH.Update)
+		relWrite.DELETE("/releases/:id", middleware.RequirePermission(model.PermProductsDelete, db), releaseAdminH.Delete)
 
-		relWrite.POST("/releases/:id/artifacts", releaseAdminH.AddArtifact)
-		relWrite.POST("/releases/:id/artifacts/:aid/finalize", releaseAdminH.FinalizeArtifact)
-		relWrite.DELETE("/releases/:id/artifacts/:aid", releaseAdminH.DeleteArtifact)
+		relWrite.POST("/releases/:id/artifacts", middleware.RequirePermission(model.PermProductsUpdate, db), releaseAdminH.AddArtifact)
+		relWrite.POST("/releases/:id/artifacts/:aid/finalize", middleware.RequirePermission(model.PermProductsUpdate, db), releaseAdminH.FinalizeArtifact)
+		relWrite.DELETE("/releases/:id/artifacts/:aid", middleware.RequirePermission(model.PermProductsDelete, db), releaseAdminH.DeleteArtifact)
 
-		relWrite.POST("/releases/:id/actions/publish", releaseAdminH.Publish)
-		relWrite.POST("/releases/:id/actions/yank", releaseAdminH.Yank)
-		relWrite.POST("/releases/:id/actions/unyank", releaseAdminH.Unyank)
+		relWrite.POST("/releases/:id/actions/publish", middleware.RequirePermission(model.PermProductsUpdate, db), releaseAdminH.Publish)
+		relWrite.POST("/releases/:id/actions/yank", middleware.RequirePermission(model.PermProductsUpdate, db), releaseAdminH.Yank)
+		relWrite.POST("/releases/:id/actions/unyank", middleware.RequirePermission(model.PermProductsUpdate, db), releaseAdminH.Unyank)
 
 		// ─── Release signing keys (per product) ───
-		admin.POST("/products/:id/signing-key", releaseSigningH.Generate)
-		admin.POST("/products/:id/signing-key/rotate", releaseSigningH.Rotate)
-		admin.DELETE("/products/:id/signing-key", releaseSigningH.Deactivate)
-		admin.GET("/products/:id/signing-keys", releaseSigningH.List)
-		admin.GET("/products/:id/signing-key/public.pem", releaseSigningH.DownloadPublicKey)
-		admin.GET("/products/:id/signing-key/tauri-pubkey", releaseSigningH.DownloadPublicKeyTauri)
+		// Signing identity is platform security config: mutations are
+		// settings-managed, the public key reads are product reads.
+		admin.POST("/products/:id/signing-key", middleware.RequirePermission(model.PermSettingsManage, db), releaseSigningH.Generate)
+		admin.POST("/products/:id/signing-key/rotate", middleware.RequirePermission(model.PermSettingsManage, db), releaseSigningH.Rotate)
+		admin.DELETE("/products/:id/signing-key", middleware.RequirePermission(model.PermSettingsManage, db), releaseSigningH.Deactivate)
+		admin.GET("/products/:id/signing-keys", middleware.RequirePermission(model.PermProductsRead, db), releaseSigningH.List)
+		admin.GET("/products/:id/signing-key/public.pem", middleware.RequirePermission(model.PermProductsRead, db), releaseSigningH.DownloadPublicKey)
+		admin.GET("/products/:id/signing-key/tauri-pubkey", middleware.RequirePermission(model.PermProductsRead, db), releaseSigningH.DownloadPublicKeyTauri)
 
 	}
 

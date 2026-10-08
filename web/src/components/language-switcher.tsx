@@ -36,7 +36,9 @@ export function LanguageSwitcher({ iconOnly = false, align = "end" }: { iconOnly
           title={t("nav.language")}
         >
           <Languages className="h-4 w-4" aria-hidden="true" />
-          {!iconOnly && <span className="text-sm">{LOCALE_LABELS[locale]}</span>}
+          {/* The name hides below sm so the narrow portal/public
+              headers keep room; the aria-label above still says it. */}
+          {!iconOnly && <span className="hidden text-sm sm:inline">{LOCALE_LABELS[locale]}</span>}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align}>

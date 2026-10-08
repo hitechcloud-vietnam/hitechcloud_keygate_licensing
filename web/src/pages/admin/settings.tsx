@@ -307,7 +307,7 @@ export default function SettingsPage() {
                 <div className="space-y-2">
                   <Label>{t("settings.timezone")}</Label>
                   <Select value={form.timezone || "UTC"} onValueChange={(v) => set("timezone", v)}>
-                    <SelectTrigger>
+                    <SelectTrigger aria-label={t("settings.timezone")}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -324,7 +324,7 @@ export default function SettingsPage() {
                 <div className="space-y-2">
                   <Label>{t("settings.language")}</Label>
                   <Select value={locale} onValueChange={(v) => setLocale(v as "en" | "zh")}>
-                    <SelectTrigger>
+                    <SelectTrigger aria-label={t("settings.language")}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -398,7 +398,7 @@ export default function SettingsPage() {
                 <div className="space-y-2">
                   <Label>{t("settings.emailProvider")}</Label>
                   <Select value={emailProvider} onValueChange={(v) => set("email_provider", v)}>
-                    <SelectTrigger>
+                    <SelectTrigger aria-label={t("settings.emailProvider")}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -619,7 +619,7 @@ export default function SettingsPage() {
             <CardContent className="space-y-2">
               <Label>{t("settings.signupMode")}</Label>
               <Select value={form.signup_mode || "open"} onValueChange={(v) => set("signup_mode", v)}>
-                <SelectTrigger className="w-full sm:w-72">
+                <SelectTrigger className="w-full sm:w-72" aria-label={t("settings.signupMode")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -911,7 +911,7 @@ function TeamManagement() {
               <div className="w-32 shrink-0 space-y-2">
                 <Label className="text-xs">{t("team.role")}</Label>
                 <Select value={role} onValueChange={setRole}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t("team.role")}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

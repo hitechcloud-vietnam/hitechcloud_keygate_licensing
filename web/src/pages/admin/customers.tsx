@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { Eye, Search } from "lucide-react"
 import { useState } from "react"
+import { ExportCsvButton } from "@/components/export-csv"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -50,6 +51,7 @@ export default function CustomersPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={t("common.search")}
+            aria-label={t("common.search")}
             value={search}
             onChange={(e) => {
               setSearch(e.target.value)
@@ -58,6 +60,11 @@ export default function CustomersPage() {
             className="pl-9"
           />
         </div>
+        <ExportCsvButton
+          filename="customers"
+          columns={[t("customers.customer"), t("common.email"), t("customers.joined"), t("customers.lastUpdated")]}
+          rows={customers.map((u) => [u.name || "", u.email, formatDate(u.created_at), formatDate(u.updated_at)])}
+        />
       </div>
 
       <Card>
@@ -100,7 +107,14 @@ export default function CustomersPage() {
                         {formatDate(u.updated_at)}
                       </DataTableCell>
                       <DataTableCell>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setViewingUser(u.id)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          title={t("customers.detail")}
+                          aria-label={t("customers.detail")}
+                          onClick={() => setViewingUser(u.id)}
+                        >
                           <Eye className="h-4 w-4" />
                         </Button>
                       </DataTableCell>

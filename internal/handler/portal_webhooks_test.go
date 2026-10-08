@@ -31,6 +31,9 @@ type fakeCustomerWebhookStore struct {
 	hooks  []*model.CustomerWebhook
 	nextID int
 	audits []*model.AuditLog
+	// rotates records the raw secrets handed to RotateCustomerWebhookSecret,
+	// in call order.
+	rotates []string
 }
 
 func (f *fakeCustomerWebhookStore) CreateCustomerWebhook(_ context.Context, w *model.CustomerWebhook, rawSecret string) error {
@@ -70,6 +73,18 @@ func (f *fakeCustomerWebhookStore) FindCustomerWebhookByID(_ context.Context, id
 		}
 	}
 	return nil, sql.ErrNoRows
+}
+
+func (f *fakeCustomerWebhookStore) RotateCustomerWebhookSecret(_ context.Context, id, rawSecret string) error {
+	for _, h := range f.hooks {
+		if h.ID == id {
+			h.Secret = rawSecret
+			h.SecretPrefix = model.CustomerWebhookDisplayPrefix(rawSecret)
+			f.rotates = append(f.rotates, rawSecret)
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func (f *fakeCustomerWebhookStore) UpdateCustomerWebhook(_ context.Context, w *model.CustomerWebhook) error {

@@ -80,6 +80,9 @@ export default function WebhooksPage() {
   const [newSecret, setNewSecret] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<WebhookConfig | null>(null)
   const [viewingDeliveries, setViewingDeliveries] = useState<string | null>(null)
+  // Disabling stops deliveries — destructive (§70), so it asks first.
+  // Enabling is instant and stays a plain toggle.
+  const [disabling, setDisabling] = useState<WebhookConfig | null>(null)
 
   const products = productsData?.products || []
   const { items: paginatedWebhooks, total: wTotal, totalPages: wTotalPages } = pg.from(data, data?.webhooks)
@@ -166,6 +169,7 @@ export default function WebhooksPage() {
         <ProductSelect value={productFilter} onChange={setProductFilter} allLabel={t("filter.allProducts")} />
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"
@@ -254,7 +258,9 @@ export default function WebhooksPage() {
                           </IconAction>
                           <IconAction
                             label={wh.active ? t("webhooks.disable") : t("webhooks.enable")}
-                            onClick={() => toggleMut.mutate({ id: wh.id, active: !wh.active })}
+                            onClick={() =>
+                              wh.active ? setDisabling(wh) : toggleMut.mutate({ id: wh.id, active: true })
+                            }
                             disabled={toggleMut.isPending && toggleMut.variables?.id === wh.id}
                           >
                             {wh.active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -316,6 +322,26 @@ export default function WebhooksPage() {
               onClick={() => deleting && deleteMut.mutate(deleting.id)}
             >
               {t("common.delete")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Disable confirm (§70): deliveries stop — the dialog says so
+          before the toggle lands. */}
+      <AlertDialog open={!!disabling} onOpenChange={() => setDisabling(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("webhooks.disableTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("webhooks.disableConfirm")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => disabling && toggleMut.mutate({ id: disabling.id, active: false })}
+            >
+              {t("webhooks.disable")}
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

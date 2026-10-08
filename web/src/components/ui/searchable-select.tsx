@@ -44,6 +44,7 @@ export function SearchableSelect({
   searchPlaceholder,
   moreLabel,
   emptyLabel,
+  label,
   className = "w-48",
   disabled,
   loading,
@@ -62,6 +63,9 @@ export function SearchableSelect({
   /** Called with how many matches are not shown. */
   moreLabel?: (hidden: number, total: number) => string
   emptyLabel?: string
+  /** Accessible name for the picker (and its search box, unless that
+      has a placeholder of its own to read instead). */
+  label?: string
   className?: string
   disabled?: boolean
   loading?: boolean
@@ -85,7 +89,7 @@ export function SearchableSelect({
       }}
       disabled={disabled}
     >
-      <SelectTrigger className={className}>
+      <SelectTrigger className={className} aria-label={label}>
         <SelectValue placeholder={placeholder || allLabel} />
       </SelectTrigger>
       <SelectContent>
@@ -97,6 +101,7 @@ export function SearchableSelect({
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder || label || undefined}
             className="h-8"
             autoComplete="off"
             onKeyDown={(e) => e.stopPropagation()}

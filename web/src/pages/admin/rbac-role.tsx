@@ -11,6 +11,15 @@ import { Link, useNavigate, useParams } from "react-router-dom"
 import { EmptyState } from "@/components/empty-state"
 import { PermissionPicker } from "@/components/permission-picker"
 import { showToast, toastError } from "@/components/toast"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -119,6 +128,9 @@ export default function RBACRolePage() {
   // membership is resolved one cached call per listed user — bounded
   // by the page size, and shared with any other role page open.
   const [userSearchRaw, setUserSearchRaw] = useState("")
+  // Revoking strips permissions off a real user — destructive (§70),
+  // so it asks first and says what changes.
+  const [revoking, setRevoking] = useState<{ id: string; email: string } | null>(null)
   const userSearch = useDebounced(userSearchRaw, 300)
   const upg = useServerPagination(10, [userSearch])
   const usersQuery = useQuery({
@@ -268,6 +280,7 @@ export default function RBACRolePage() {
         <CardContent className="space-y-4">
           <Input
             placeholder={t("rbac.searchUsers")}
+            aria-label={t("rbac.searchUsers")}
             value={userSearchRaw}
             onChange={(e) => setUserSearchRaw(e.target.value)}
             className="w-full sm:w-72"
@@ -308,7 +321,7 @@ export default function RBACRolePage() {
                                 variant="outline"
                                 size="sm"
                                 disabled={revokeMut.isPending}
-                                onClick={() => revokeMut.mutate(u.id)}
+                                onClick={() => setRevoking({ id: u.id, email: u.email })}
                               >
                                 {t("rbac.revoke")}
                               </Button>
@@ -351,6 +364,29 @@ export default function RBACRolePage() {
           onCreated={(created) => navigate(`/admin/rbac/roles/${created.id}`)}
         />
       )}
+
+      {/* Revoke confirm (§70): names the user and says exactly what
+          they lose — and what they keep. */}
+      <AlertDialog open={!!revoking} onOpenChange={() => setRevoking(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("rbac.revokeTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {revoking?.email ? `${revoking.email} — ` : ""}
+              {t("rbac.revokeConfirm")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => revoking && revokeMut.mutate(revoking.id)}
+            >
+              {t("rbac.revoke")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

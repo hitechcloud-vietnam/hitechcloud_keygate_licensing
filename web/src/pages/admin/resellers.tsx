@@ -3,6 +3,7 @@ import { Eye, Handshake, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { ListEmptyState } from "@/components/empty-state"
+import { ExportCsvButton } from "@/components/export-csv"
 import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
@@ -120,20 +121,40 @@ export default function ResellersPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("resellers.title")}</h1>
           <p className="text-muted-foreground">{t("resellers.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4 mr-2" /> {t("resellers.new")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="resellers"
+            columns={[
+              t("common.name"),
+              t("resellers.contactEmail"),
+              t("common.status"),
+              t("resellers.commissionRate"),
+              t("common.created"),
+            ]}
+            rows={resellers.map((r) => [
+              r.name,
+              r.contact_email,
+              r.status,
+              formatBps(r.commission_bps),
+              formatDate(r.created_at),
+            ])}
+          />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" /> {t("resellers.new")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"
         />
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-48" aria-label={t("common.status")}>
             <SelectValue placeholder={t("filter.allStatuses")} />
           </SelectTrigger>
           <SelectContent>
@@ -195,10 +216,22 @@ export default function ResellersPage() {
                       <DataTableCell className="text-muted-foreground">{formatDate(r.created_at)}</DataTableCell>
                       <DataTableCell>
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => navigate(`/admin/resellers/${r.id}`)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("resellers.detail")}
+                            aria-label={t("resellers.detail")}
+                            onClick={() => navigate(`/admin/resellers/${r.id}`)}
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => setDeleting(r)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("common.delete")}
+                            aria-label={t("common.delete")}
+                            onClick={() => setDeleting(r)}
+                          >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>

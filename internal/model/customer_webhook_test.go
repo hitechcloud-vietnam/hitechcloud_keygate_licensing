@@ -97,7 +97,7 @@ func TestValidateCustomerWebhookURL(t *testing.T) {
 	}{
 		{"https public", "https://example.com/webhooks"},
 		{"http public", "http://hooks.example.com/a/b?x=1"},
-		{"public literal ip", "https://203.0.113.10/hook"}, // 203.0.113/24 is doc range but not in the cheap list
+		{"public literal ip", "https://203.0.114.10/hook"}, // just outside TEST-NET-3
 		{"public v6", "https://[2606:4700::1111]/hook"},
 	} {
 		if err := ValidateCustomerWebhookURL(tc.url); err != nil {
@@ -121,6 +121,15 @@ func TestValidateCustomerWebhookURL(t *testing.T) {
 		{"private 192.168", "http://192.168.1.1/hook"},
 		{"link local 169.254", "http://169.254.169.254/latest/meta-data"},
 		{"unspecified", "http://0.0.0.0/hook"},
+		{"this network 0/8", "http://0.1.2.3/hook"},
+		{"cgnat metadata", "http://100.100.100.100/hook"}, // Alibaba metadata via CGNAT
+		{"cgnat range", "http://100.64.0.1/hook"},
+		{"test-net-3", "http://203.0.113.10/hook"},
+		{"multicast", "http://224.0.0.1/hook"},
+		{"limited broadcast", "http://255.255.255.255/hook"},
+		{"nat64", "http://[64:ff9b::7f00:1]/hook"},
+		{"teredo", "http://[2001::1]/hook"},
+		{"6to4", "http://[2002:c000:0204::1]/hook"},
 		{"loopback v6", "http://[::1]/hook"},
 		{"too long", "https://example.com/" + strings.Repeat("a", 3000)},
 	} {

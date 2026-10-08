@@ -3,6 +3,7 @@ import { Eye, Megaphone, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { ListEmptyState } from "@/components/empty-state"
+import { ExportCsvButton } from "@/components/export-csv"
 import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
@@ -91,20 +92,42 @@ export default function AffiliatesPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("affiliates.title")}</h1>
           <p className="text-muted-foreground">{t("affiliates.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4 mr-2" /> {t("affiliates.new")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="affiliates"
+            columns={[
+              t("common.name"),
+              t("resellers.contactEmail"),
+              t("common.status"),
+              t("affiliates.commissionModel"),
+              t("common.created"),
+            ]}
+            rows={affiliates.map((a) => [
+              a.name,
+              a.contact_email,
+              a.status,
+              a.commission_model === "fixed"
+                ? `${formatMinorUnits(a.commission_minor)} (${t("common.minorUnits")})`
+                : formatBps(a.commission_bps),
+              formatDate(a.created_at),
+            ])}
+          />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" /> {t("affiliates.new")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"
         />
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-48" aria-label={t("common.status")}>
             <SelectValue placeholder={t("filter.allStatuses")} />
           </SelectTrigger>
           <SelectContent>
@@ -170,10 +193,22 @@ export default function AffiliatesPage() {
                       <DataTableCell className="text-muted-foreground">{formatDate(a.created_at)}</DataTableCell>
                       <DataTableCell>
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => navigate(`/admin/affiliates/${a.id}`)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("affiliates.detail")}
+                            aria-label={t("affiliates.detail")}
+                            onClick={() => navigate(`/admin/affiliates/${a.id}`)}
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => setDeleting(a)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("common.delete")}
+                            aria-label={t("common.delete")}
+                            onClick={() => setDeleting(a)}
+                          >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>

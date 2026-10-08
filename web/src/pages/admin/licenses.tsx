@@ -18,6 +18,7 @@ import {
 import { useState } from "react"
 import { Link } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
+import { ExportCsvButton } from "@/components/export-csv"
 import { PlanSelect } from "@/components/plan-select"
 import { ProductSelect } from "@/components/product-select"
 import { showToast, toastError } from "@/components/toast"
@@ -149,7 +150,7 @@ export default function LicensesPage() {
             <p className="text-muted-foreground mt-1 mb-4">{t("licenses.noProductsDesc")}</p>
             <Button asChild>
               <Link to="/admin/products">
-                <Plus className="h-4 w-4 mr-2" /> Create Product
+                <Plus className="h-4 w-4 mr-2" /> {t("products.createTitle")}
               </Link>
             </Button>
           </CardContent>
@@ -180,6 +181,7 @@ export default function LicensesPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={t("common.search")}
+            aria-label={t("common.search")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -196,7 +198,7 @@ export default function LicensesPage() {
             className="flex-1 sm:w-48 sm:flex-none"
           />
           <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-            <SelectTrigger className="flex-1 sm:w-40 sm:flex-none">
+            <SelectTrigger className="flex-1 sm:w-40 sm:flex-none" aria-label={t("common.status")}>
               <SelectValue placeholder={t("filter.allStatuses")} />
             </SelectTrigger>
             <SelectContent>
@@ -209,6 +211,29 @@ export default function LicensesPage() {
             </SelectContent>
           </Select>
         </div>
+        <ExportCsvButton
+          filename="licenses"
+          columns={[
+            t("common.email"),
+            t("licenses.licenseKey"),
+            t("common.product"),
+            t("common.plan"),
+            t("licenses.activations"),
+            t("common.status"),
+            t("licenses.validUntil"),
+            t("common.created"),
+          ]}
+          rows={licenses.map((lic) => [
+            lic.email,
+            maskKey(data?.license_key_hints?.[lic.id]),
+            lic.product?.name || "-",
+            lic.plan?.name || "-",
+            lic.plan?.license_model === "floating" ? (lic.active_session_count ?? 0) : (lic.activation_count ?? 0),
+            lic.status,
+            lic.valid_until ? formatDate(lic.valid_until) : t("licenses.perpetual"),
+            formatDate(lic.created_at),
+          ])}
+        />
       </div>
 
       <Card>

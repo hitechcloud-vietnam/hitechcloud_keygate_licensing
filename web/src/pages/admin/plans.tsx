@@ -3,6 +3,7 @@ import { Copy, Package, Pencil, Plus, Trash2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
+import { ExportCsvButton } from "@/components/export-csv"
 import { ProductSelect } from "@/components/product-select"
 import { showToast, toastError } from "@/components/toast"
 import {
@@ -126,14 +127,38 @@ export default function PlansPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("plans.title")}</h1>
           <p className="text-muted-foreground">{t("plans.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4 mr-2" /> {t("plans.new")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="plans"
+            columns={[
+              t("common.name"),
+              t("common.product"),
+              t("plans.licenseType"),
+              t("plans.maxActivations"),
+              t("plans.maxSeats"),
+              t("common.status"),
+              t("common.created"),
+            ]}
+            rows={plans.map((p) => [
+              p.name,
+              p.product?.name || p.product_id,
+              p.license_type,
+              p.max_activations,
+              p.max_seats,
+              p.active ? t("common.active") : t("common.inactive"),
+              p.created_at,
+            ])}
+          />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" /> {t("plans.new")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"
@@ -215,6 +240,7 @@ export default function PlansPage() {
                                 variant="ghost"
                                 size="icon"
                                 title={t("plans.copyCheckoutLink")}
+                                aria-label={t("plans.copyCheckoutLink")}
                                 onClick={() => {
                                   const url = `${window.location.origin}/pay/${p.checkout_id}`
                                   navigator.clipboard.writeText(url)
@@ -224,10 +250,22 @@ export default function PlansPage() {
                                 <Copy className="h-4 w-4" />
                               </Button>
                             )}
-                            <Button variant="ghost" size="icon" onClick={() => setEditing(p)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={t("common.edit")}
+                              aria-label={t("common.edit")}
+                              onClick={() => setEditing(p)}
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" onClick={() => setDeleting(p)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={t("common.delete")}
+                              aria-label={t("common.delete")}
+                              onClick={() => setDeleting(p)}
+                            >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
                           </div>

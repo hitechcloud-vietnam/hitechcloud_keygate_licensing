@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
+import { ExportCsvButton } from "@/components/export-csv"
 import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
@@ -73,14 +74,36 @@ export default function TaxRatesPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("taxRates.title")}</h1>
           <p className="text-muted-foreground">{t("taxRates.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4 mr-2" /> {t("taxRates.new")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="tax-rates"
+            columns={[
+              t("taxRates.jurisdiction"),
+              t("taxRates.colRate"),
+              t("taxRates.inclusive"),
+              t("taxRates.country"),
+              t("taxRates.region"),
+              t("common.status"),
+            ]}
+            rows={rates.map((r) => [
+              r.jurisdiction,
+              formatBps(r.basis_points),
+              r.inclusive ? t("common.yes") : t("common.no"),
+              r.country || "",
+              r.region || "",
+              r.active ? t("common.active") : t("common.inactive"),
+            ])}
+          />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" /> {t("taxRates.new")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"
@@ -123,10 +146,22 @@ export default function TaxRatesPage() {
                       </DataTableCell>
                       <DataTableCell>
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => setEditing(r)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("common.edit")}
+                            aria-label={t("common.edit")}
+                            onClick={() => setEditing(r)}
+                          >
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => setDeleting(r)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("common.delete")}
+                            aria-label={t("common.delete")}
+                            onClick={() => setDeleting(r)}
+                          >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>

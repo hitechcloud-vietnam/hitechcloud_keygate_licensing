@@ -1343,6 +1343,7 @@ func (h *StripeHandler) currentSubscription(id string) (*subscriptionEvent, erro
 	if sub.LastResponse == nil || json.Unmarshal(sub.LastResponse.RawJSON, &cur) != nil || cur.ID != id {
 		return nil, fmt.Errorf("fetch subscription %s: unreadable response", id)
 	}
+	cur.raw = sub
 	return &cur, nil
 }
 
@@ -1690,6 +1691,12 @@ type subscriptionEvent struct {
 			CurrentPeriodEnd int64 `json:"current_period_end"`
 		} `json:"data"`
 	} `json:"items"`
+
+	// raw is the live API object this state was read from, when it was
+	// read live (see currentSubscription); nil when the struct stands
+	// in for a webhook payload alone. The plan-intent hook acts on it
+	// rather than fetching the subscription a second time.
+	raw *stripe.Subscription
 }
 
 // EndsThisPeriod reports whether the subscription stops at the end of the
@@ -1923,7 +1930,12 @@ func (h *StripeHandler) syncFromCurrent(ctx context.Context, lic *model.License,
 		return fmt.Errorf("record cancel-at-period-end: %w", err)
 	}
 	h.applySubscriptionState(ctx, lic, cur, &asOf, event)
-	return nil
+	// Plan intent (change_plan.go): a scheduled upgrade/downgrade that
+	// is due executes here — the renewal is its trigger — and a licence
+	// whose plan drifted from the price the customer is billed for is
+	// reconciled. An error is returned so Stripe retries; every step is
+	// safe to repeat.
+	return h.applyPlanIntent(ctx, lic, cur.raw)
 }
 
 // applySubscriptionState writes a subscription's status and period to its
@@ -2636,6 +2648,11 @@ func (h *StripeHandler) CancelSubscription(c *gin.Context) {
 		cancelAsOf, stampErr := h.Store.StripeReadStamp(c)
 		sub, updateErr := subscription.Update(lic.StripeSubscriptionID, &stripe.SubscriptionParams{
 			CancelAtPeriodEnd: stripe.Bool(true),
+			// A plan change scheduled for the next period must not fire
+			// on a subscription that ends before it: the same call that
+			// schedules the ending drops the intent (an empty metadata
+			// value deletes the key on Stripe's side).
+			Metadata: map[string]string{metaPendingPlanID: "", metaPendingChangeAt: ""},
 		})
 		if updateErr != nil {
 			response.Internal(c, updateErr)
@@ -2679,14 +2696,41 @@ func (h *StripeHandler) CancelSubscription(c *gin.Context) {
 	})
 }
 
+// ChangePlan handles POST /api/v1/portal/subscription/change-plan —
+// moving a subscription licence to another plan (plan.md §77/§78).
+//
+// Request body (backward compatible with the original
+// {license_id, new_price_id, prorate}):
+//
+//	license_id     the licence to move (required)
+//	plan_id        the target plan (preferred)
+//	new_price_id   the legacy spelling: the plan behind a Stripe price
+//	               (at least one of plan_id / new_price_id is required;
+//	               when both are given they must name the same plan)
+//	timing         "immediate" | "next_period"; omitted, the default is
+//	               immediate for an upgrade or an unknown direction and
+//	               next_period for a downgrade (§77)
+//	prorate        legacy: false turns the proration off; a request that
+//	               carries this flag at all predates `timing` and keeps
+//	               the old behaviour of moving the plan immediately
+//
+// The engine — direction/proration rules, the immediate switch, the
+// deferred metadata intent and its idempotent execution at renewal —
+// lives in change_plan.go. Money: every amount in the response is an
+// integer minor-unit field read from Stripe; no proration is ever
+// computed here (§51/§78).
 func (h *StripeHandler) ChangePlan(c *gin.Context) {
 	var req struct {
-		LicenseID  string `json:"license_id" binding:"required"`
-		NewPriceID string `json:"new_price_id" binding:"required"`
-		Prorate    *bool  `json:"prorate"` // default true
+		LicenseID string `json:"license_id" binding:"required"`
+		// PlanID names the target plan; NewPriceID is the legacy
+		// spelling (the plan behind a Stripe price).
+		PlanID     string `json:"plan_id"`
+		NewPriceID string `json:"new_price_id"`
+		Timing     string `json:"timing"`  // immediate | next_period
+		Prorate    *bool  `json:"prorate"` // legacy: false = no proration
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "license_id and new_price_id are required")
+		response.BadRequest(c, "license_id and plan_id (or new_price_id) are required")
 		return
 	}
 
@@ -2707,9 +2751,14 @@ func (h *StripeHandler) ChangePlan(c *gin.Context) {
 		return
 	}
 
-	newPlan, err := h.Store.FindPlanByStripePrice(c, req.NewPriceID)
-	if err != nil || newPlan == nil {
-		response.BadRequest(c, "invalid new_price_id")
+	newPlan := h.resolveChangeTarget(c, req.PlanID, req.NewPriceID)
+	if newPlan == nil {
+		return
+	}
+
+	if newPlan.ID == lic.PlanID {
+		response.Err(c, http.StatusBadRequest, "PLAN_UNCHANGED",
+			"the license is already on this plan")
 		return
 	}
 
@@ -2743,7 +2792,16 @@ func (h *StripeHandler) ChangePlan(c *gin.Context) {
 		return
 	}
 
-	sub, err := subscription.Get(lic.StripeSubscriptionID, nil)
+	if newPlan.StripePriceID == "" {
+		response.BadRequest(c, "target plan has no Stripe price")
+		return
+	}
+	if req.Timing != "" && req.Timing != changeTimingImmediate && req.Timing != changeTimingNextPeriod {
+		response.BadRequest(c, "timing must be immediate or next_period")
+		return
+	}
+
+	sub, err := fetchSubscriptionForChange(lic.StripeSubscriptionID)
 	if err != nil {
 		response.Internal(c, err)
 		return
@@ -2756,57 +2814,30 @@ func (h *StripeHandler) ChangePlan(c *gin.Context) {
 		return
 	}
 
-	prorationBehavior := "create_prorations"
+	// Direction decides only the DEFAULT timing; an explicit one is
+	// honored as asked. The comparison reads integer minor units from
+	// Stripe's prices and computes nothing (§51/§78).
+	direction := planChangeDirection(sub, newPlan)
+	timing := req.Timing
+	if timing == "" {
+		if req.Prorate != nil {
+			// A caller of the pre-timing endpoint: it always moved the
+			// plan immediately and this flag spoke only about proration.
+			timing = changeTimingImmediate
+		} else {
+			timing = defaultTimingFor(direction)
+		}
+	}
+	proration := prorationAlwaysInvoice
 	if req.Prorate != nil && !*req.Prorate {
-		prorationBehavior = "none"
+		proration = prorationNone
 	}
 
-	params := &stripe.SubscriptionParams{
-		ProrationBehavior: stripe.String(prorationBehavior),
-		Items: []*stripe.SubscriptionItemsParams{
-			{
-				ID:    stripe.String(sub.Items.Data[0].ID),
-				Price: stripe.String(req.NewPriceID),
-			},
-		},
-	}
-
-	updatedSub, err := subscription.Update(lic.StripeSubscriptionID, params)
-	if err != nil {
-		response.Internal(c, err)
+	if timing == changeTimingNextPeriod {
+		h.changePlanDeferred(c, lic, sub, newPlan, direction)
 		return
 	}
-
-	oldPlanID := lic.PlanID
-	lic.PlanID = newPlan.ID
-	_ = h.Store.UpdateLicense(c, lic, "plan_id")
-
-	if subRecord, err := h.Store.FindSubscriptionByLicense(c, lic.ID); err == nil {
-		subRecord.PlanID = newPlan.ID
-		_ = h.Store.UpdateSubscription(c, subRecord, "plan_id")
-	}
-	_ = updatedSub // used for audit context
-
-	h.Store.Audit(c, &model.AuditLog{
-		Entity: "license", EntityID: lic.ID, Action: "plan_changed",
-		ActorType: "user",
-		Changes: map[string]any{
-			"old_plan_id": oldPlanID, "new_plan_id": newPlan.ID,
-			"proration": prorationBehavior,
-		},
-	})
-	if h.WebhookSvc != nil {
-		h.WebhookSvc.Dispatch(c, lic.ProductID, "plan.changed", map[string]any{
-			"license_id": lic.ID, "old_plan_id": oldPlanID, "new_plan_id": newPlan.ID,
-		})
-	}
-
-	response.OK(c, gin.H{
-		"status":        "plan_changed",
-		"new_plan_id":   newPlan.ID,
-		"new_plan_name": newPlan.Name,
-		"proration":     prorationBehavior,
-	})
+	h.changePlanImmediate(c, lic, sub, newPlan, direction, proration)
 }
 
 // licenseForCharge finds the license a charge paid for.

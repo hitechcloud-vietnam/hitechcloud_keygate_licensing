@@ -7,12 +7,23 @@ import { cn } from "@/lib/utils"
 
 // ─── Enhanced Table Components ───
 
-const DataTable = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto rounded-md border">
-      <table ref={ref} className={cn("w-full caption-bottom text-sm border-collapse", className)} {...props} />
-    </div>
-  ),
+// The wrapper scrolls sideways on a narrow screen and takes focus so
+// keyboard users can scroll it; it names itself a region so the
+// focusable box announces what it holds. `label` names the contents.
+const DataTable = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement> & { label?: string }>(
+  ({ className, label, ...props }, ref) => {
+    const { t } = useI18n()
+    return (
+      <section
+        aria-label={label ?? t("common.scrollableTable")}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region must be keyboard-scrollable (WCAG 2.1.1)
+        tabIndex={0}
+        className="relative w-full overflow-auto rounded-md border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <table ref={ref} className={cn("w-full caption-bottom text-sm border-collapse", className)} {...props} />
+      </section>
+    )
+  },
 )
 DataTable.displayName = "DataTable"
 
@@ -45,6 +56,7 @@ const DataTableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttribu
   ({ className, ...props }, ref) => (
     <th
       ref={ref}
+      scope="col"
       className={cn(
         "h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-semibold uppercase tracking-wider text-muted-foreground [&:has([role=checkbox])]:pr-0",
         className,
@@ -81,6 +93,7 @@ function DataTableSortHead({
   const active = sort.sort === column
   return (
     <th
+      scope="col"
       aria-sort={active ? (sort.order === "asc" ? "ascending" : "descending") : "none"}
       className={cn("h-10 p-0 text-left align-middle [&:has([role=checkbox])]:pr-0", className)}
     >
@@ -160,8 +173,12 @@ function DataTablePagination({
   return (
     // Two rows on a phone, one on a wide screen. Side by side at 390px
     // the controls ran past the edge and the next/last buttons became
-    // unreachable, which is a pager that cannot page.
-    <div className="flex flex-col gap-3 px-1 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+    // unreachable, which is a pager that cannot page. It is a nav
+    // landmark so a screen-reader user can jump straight to it.
+    <nav
+      aria-label={t("common.pagination")}
+      className="flex flex-col gap-3 px-1 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+    >
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="whitespace-nowrap">
           {t("common.pageRange", { from, to, total: total.toLocaleString(locale) })}
@@ -172,7 +189,7 @@ function DataTablePagination({
             <div className="flex items-center gap-1.5">
               <span className="whitespace-nowrap">{t("common.rowsPerPage")}</span>
               <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
-                <SelectTrigger className="h-7 w-16 text-xs">
+                <SelectTrigger className="h-7 w-16 text-xs" aria-label={t("common.rowsPerPage")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -189,15 +206,28 @@ function DataTablePagination({
       </div>
 
       <div className="flex items-center justify-center gap-1 sm:justify-end">
-        <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page === 0} onClick={() => onPageChange(0)}>
+        {/* 44px on a phone (a finger needs it), the compact 28px from
+            sm up where a mouse does the clicking. The icons alone say
+            nothing out loud, so each button is named. */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-11 w-11 sm:h-7 sm:w-7"
+          disabled={page === 0}
+          onClick={() => onPageChange(0)}
+          aria-label={t("common.firstPage")}
+          title={t("common.firstPage")}
+        >
           <ChevronsLeft className="h-3.5 w-3.5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
+          className="h-11 w-11 sm:h-7 sm:w-7"
           disabled={page === 0}
           onClick={() => onPageChange(page - 1)}
+          aria-label={t("common.prevPage")}
+          title={t("common.prevPage")}
         >
           <ChevronLeft className="h-3.5 w-3.5" />
         </Button>
@@ -226,6 +256,8 @@ function DataTablePagination({
                 size="icon"
                 className={cn("h-7 w-7 text-xs", p === page && "pointer-events-none")}
                 onClick={() => onPageChange(p)}
+                aria-label={t("common.goToPage", { page: p + 1 })}
+                aria-current={p === page ? "page" : undefined}
               >
                 {p + 1}
               </Button>
@@ -236,23 +268,27 @@ function DataTablePagination({
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
+          className="h-11 w-11 sm:h-7 sm:w-7"
           disabled={page >= totalPages - 1}
           onClick={() => onPageChange(page + 1)}
+          aria-label={t("common.nextPage")}
+          title={t("common.nextPage")}
         >
           <ChevronRight className="h-3.5 w-3.5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
+          className="h-11 w-11 sm:h-7 sm:w-7"
           disabled={page >= totalPages - 1}
           onClick={() => onPageChange(totalPages - 1)}
+          aria-label={t("common.lastPage")}
+          title={t("common.lastPage")}
         >
           <ChevronsRight className="h-3.5 w-3.5" />
         </Button>
       </div>
-    </div>
+    </nav>
   )
 }
 

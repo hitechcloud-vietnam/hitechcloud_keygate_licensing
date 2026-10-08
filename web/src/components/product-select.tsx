@@ -71,6 +71,7 @@ export function ProductSelect({
       allLabel={allLabel}
       noneLabel={noneLabel}
       placeholder={placeholder}
+      label={t("common.product")}
       searchPlaceholder={t("filter.searchProducts")}
       emptyLabel={t("filter.noMatches")}
       moreLabel={(hidden) => t("filter.moreMatches", { count: hidden })}

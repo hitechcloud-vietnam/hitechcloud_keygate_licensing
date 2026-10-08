@@ -3,6 +3,7 @@ import { Calculator, Eye, Plus, ShoppingCart } from "lucide-react"
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { ListEmptyState } from "@/components/empty-state"
+import { ExportCsvButton } from "@/components/export-csv"
 import { showToast, toastError } from "@/components/toast"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -57,20 +58,42 @@ export default function OrdersPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("orders.title")}</h1>
           <p className="text-muted-foreground">{t("orders.subtitle")}</p>
         </div>
-        <Button variant="outline" onClick={() => setQuoting(true)}>
-          <Calculator className="h-4 w-4 mr-2" /> {t("orders.quoteOpen")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="orders"
+            columns={[
+              t("orders.orderNumber"),
+              t("orders.customer"),
+              t("common.status"),
+              t("orders.colTotal"),
+              t("orders.coupon"),
+              t("common.created"),
+            ]}
+            rows={orders.map((o) => [
+              o.order_number,
+              o.customer_email,
+              o.status,
+              formatMinor(o.total_minor, o.currency),
+              o.coupon_code || "",
+              o.created_at,
+            ])}
+          />
+          <Button variant="outline" onClick={() => setQuoting(true)}>
+            <Calculator className="h-4 w-4 mr-2" /> {t("orders.quoteOpen")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:w-64"
         />
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-48" aria-label={t("common.status")}>
             <SelectValue placeholder={t("filter.allStatuses")} />
           </SelectTrigger>
           <SelectContent>
@@ -139,7 +162,13 @@ export default function OrdersPage() {
                       <DataTableCell className="text-muted-foreground">{formatDate(o.created_at)}</DataTableCell>
                       <DataTableCell>
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => navigate(`/admin/orders/${o.id}`)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("orders.viewDetail")}
+                            aria-label={t("orders.viewDetail")}
+                            onClick={() => navigate(`/admin/orders/${o.id}`)}
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
                         </div>

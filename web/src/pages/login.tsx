@@ -139,8 +139,9 @@ export default function LoginPage() {
           {otpStep === "email" && (
             <form onSubmit={handleOtpSend} className="space-y-3">
               <div className="space-y-2">
-                <Label>{t("common.email")}</Label>
+                <Label htmlFor="otp-email">{t("common.email")}</Label>
                 <Input
+                  id="otp-email"
                   type="email"
                   placeholder="you@example.com"
                   value={otpEmail}
@@ -163,6 +164,7 @@ export default function LoginPage() {
               <p className="text-sm text-muted-foreground text-center">{t("login.codeSentTo", { email: otpEmail })}</p>
               <div className="space-y-2">
                 <Input
+                  aria-label={t("login.codeLabel")}
                   type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
@@ -214,12 +216,18 @@ export default function LoginPage() {
               </div>
               <form onSubmit={handleDevLogin} className="space-y-3">
                 <div className="space-y-2">
-                  <Label>{t("common.email")}</Label>
-                  <Input type="email" value={devEmail} onChange={(e) => setDevEmail(e.target.value)} required />
+                  <Label htmlFor="dev-email">{t("common.email")}</Label>
+                  <Input
+                    id="dev-email"
+                    type="email"
+                    value={devEmail}
+                    onChange={(e) => setDevEmail(e.target.value)}
+                    required
+                  />
                 </div>
                 <div className="space-y-2">
-                  <Label>{t("common.name")}</Label>
-                  <Input value={devName} onChange={(e) => setDevName(e.target.value)} />
+                  <Label htmlFor="dev-name">{t("common.name")}</Label>
+                  <Input id="dev-name" value={devName} onChange={(e) => setDevName(e.target.value)} />
                 </div>
                 {devError && <p className="text-sm text-destructive">{devError}</p>}
                 <Button type="submit" className="w-full" disabled={devLoading}>

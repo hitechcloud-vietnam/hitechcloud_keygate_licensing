@@ -230,16 +230,63 @@ func ValidateCustomerWebhookURL(raw string) error {
 
 // isNonPublicCustomerWebhookIP is the cheap write-time target check: it
 // rejects the literal addresses a webhook must never be delivered to.
-// It is deliberately smaller than the delivery-time guard (no CIDR
-// table) — it is a fast filter at save time, not the authoritative SSRF
-// defence (see ValidateCustomerWebhookURL).
+// It is deliberately smaller than the delivery-time guard (no DNS
+// resolution) — it is a fast filter at save time, not the authoritative
+// SSRF defence (see ValidateCustomerWebhookURL).
+//
+// Beyond the std-lib predicates it covers the reserved ranges those
+// predicates miss: CGNAT 100.64/10 (which contains the Alibaba metadata
+// service at 100.100.100.100), 0.0.0.0/8 ("this network" —
+// IsUnspecified matches only 0.0.0.0 itself), the documentation and
+// benchmarking ranges, and the IPv6 transition ranges that can carry a
+// tunneled IPv4 target (NAT64, Teredo, 6to4). Multicast and the limited
+// broadcast are refused as well — none of them are legitimate webhook
+// targets.
 func isNonPublicCustomerWebhookIP(ip net.IP) bool {
 	if ip == nil {
 		return true // unparseable: fail closed
 	}
-	return ip.IsLoopback() ||
+	if ip.IsLoopback() ||
 		ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
+		ip.IsUnspecified() ||
+		ip.IsMulticast() {
+		return true
+	}
+	for _, n := range nonPublicCustomerWebhookNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// nonPublicCustomerWebhookNets is the fixed table of reserved ranges the
+// std-lib IP predicates do not cover. Parsed once; a typo in a CIDR
+// literal panics at init (fail closed) rather than admitting the range.
+var nonPublicCustomerWebhookNets = mustParseCIDRs(
+	"0.0.0.0/8",       // "this network"
+	"100.64.0.0/10",   // CGNAT (RFC 6598) — Alibaba metadata 100.100.100.100
+	"192.0.0.0/24",    // IETF protocol assignments
+	"192.0.2.0/24",    // TEST-NET-1
+	"198.18.0.0/15",   // benchmarking (RFC 2544)
+	"198.51.100.0/24", // TEST-NET-2
+	"203.0.113.0/24",  // TEST-NET-3
+	"240.0.0.0/4",     // reserved + limited broadcast 255.255.255.255
+	"64:ff9b::/96",    // NAT64 (RFC 6052)
+	"2001::/32",       // Teredo (RFC 4380)
+	"2002::/16",       // 6to4 (RFC 3056)
+)
+
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic("model: bad webhook IP filter CIDR " + c + ": " + err.Error())
+		}
+		out = append(out, n)
+	}
+	return out
 }

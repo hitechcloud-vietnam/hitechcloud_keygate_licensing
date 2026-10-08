@@ -200,7 +200,7 @@ function ProfileForm({ reseller }: { reseller: Reseller }) {
             <div className="space-y-2">
               <Label>{t("common.status")}</Label>
               <Select value={form.status} onValueChange={(v) => set("status", v)}>
-                <SelectTrigger>
+                <SelectTrigger aria-label={t("common.status")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -449,7 +449,7 @@ function CommissionsCard({ resellerId, contractBps }: { resellerId: string; cont
         <CardTitle className="text-base">{t("resellerDetail.commissions")}</CardTitle>
         <div className="flex items-center gap-3">
           <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="w-40" aria-label={t("common.status")}>
               <SelectValue placeholder={t("filter.allStatuses")} />
             </SelectTrigger>
             <SelectContent>

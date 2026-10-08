@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { useState } from "react"
+import { ExportCsvButton } from "@/components/export-csv"
 import { ProductSelect } from "@/components/product-select"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
@@ -65,7 +66,7 @@ export default function AuditPage() {
             setPage(0)
           }}
         >
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-48" aria-label={t("audit.filterEntity")}>
             <SelectValue placeholder={t("audit.filterEntity")} />
           </SelectTrigger>
           <SelectContent>
@@ -82,6 +83,7 @@ export default function AuditPage() {
         </Select>
         <Input
           placeholder={t("audit.filterEntityId")}
+          aria-label={t("audit.filterEntityId")}
           value={entityIdFilter}
           onChange={(e) => {
             setEntityIdFilter(e.target.value)
@@ -102,6 +104,17 @@ export default function AuditPage() {
           placeholder={t("audit.filterProduct")}
           className="w-full sm:w-64"
           withType
+        />
+        <ExportCsvButton
+          filename="audit-log"
+          columns={[t("common.created"), t("audit.entity"), t("audit.action"), t("audit.actor"), t("audit.changes")]}
+          rows={logs.map((log) => [
+            formatDate(log.created_at),
+            `${log.entity} #${log.entity_id.substring(0, 8)}`,
+            log.action,
+            `${log.actor_type || ""}${log.ip_address ? ` (${log.ip_address})` : ""}`,
+            log.changes ? JSON.stringify(log.changes) : "",
+          ])}
         />
       </div>
 

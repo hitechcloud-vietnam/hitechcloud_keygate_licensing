@@ -218,7 +218,7 @@ function ProfileForm({ affiliate }: { affiliate: Affiliate }) {
             <div className="space-y-2">
               <Label>{t("common.status")}</Label>
               <Select value={form.status} onValueChange={(v) => set("status", v)}>
-                <SelectTrigger>
+                <SelectTrigger aria-label={t("common.status")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -233,7 +233,7 @@ function ProfileForm({ affiliate }: { affiliate: Affiliate }) {
             <div className="space-y-2">
               <Label>{t("affiliates.commissionModel")}</Label>
               <Select value={form.commissionModel} onValueChange={(v) => set("commissionModel", v)}>
-                <SelectTrigger>
+                <SelectTrigger aria-label={t("affiliates.commissionModel")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -578,7 +578,7 @@ function ConversionsCard({ affiliateId }: { affiliateId: string }) {
       <CardHeader className="flex flex-row items-center justify-between space-y-0 gap-3">
         <CardTitle className="text-base">{t("affiliateDetail.conversions")}</CardTitle>
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-40" aria-label={t("common.status")}>
             <SelectValue placeholder={t("filter.allStatuses")} />
           </SelectTrigger>
           <SelectContent>

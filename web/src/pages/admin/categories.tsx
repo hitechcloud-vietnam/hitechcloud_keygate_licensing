@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
+import { ExportCsvButton } from "@/components/export-csv"
 import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
@@ -77,14 +78,22 @@ export default function CategoriesPage() {
           <h1 className="text-2xl font-bold tracking-tight sr-only md:not-sr-only">{t("categories.title")}</h1>
           <p className="text-muted-foreground">{t("categories.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4 mr-2" /> {t("categories.new")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="categories"
+            columns={[t("common.name"), t("categories.slug"), t("categories.description"), t("categories.position")]}
+            rows={categories.map((c) => [c.name, c.slug, c.description || "", c.position])}
+          />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" /> {t("categories.new")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Input
           placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => {
             setSearch(e.target.value)

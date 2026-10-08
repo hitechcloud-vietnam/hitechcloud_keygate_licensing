@@ -231,7 +231,7 @@ function FeedURLsSection({ product, onOpenAccess }: { product: Product; onOpenAc
       <div className="space-y-2">
         <Label>{t("updateSettings.channel")}</Label>
         <Select value={channel} onValueChange={setChannel}>
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-48" aria-label={t("updateSettings.channel")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -324,7 +324,7 @@ function PlatformPicker({
     <div className="flex items-center justify-between gap-3">
       <p className="text-sm font-medium">{label}</p>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className="w-40 h-8 text-xs">
+        <SelectTrigger className="w-40 h-8 text-xs" aria-label={label}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -572,7 +572,7 @@ function RequiredUpdateSection({ product }: { product: Product }) {
           <div className="space-y-2">
             <Label>{t("updateSettings.minimumVersion")}</Label>
             <Select value={chosen} onValueChange={setVersion}>
-              <SelectTrigger className="w-full sm:w-56">
+              <SelectTrigger className="w-full sm:w-56" aria-label={t("updateSettings.minimumVersion")}>
                 <SelectValue placeholder={t("updateSettings.selectVersion")} />
               </SelectTrigger>
               <SelectContent>
