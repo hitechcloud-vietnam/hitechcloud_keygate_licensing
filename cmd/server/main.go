@@ -888,6 +888,10 @@ func main() {
 		marketplace.GET("/categories", marketplaceH.ListCategories)
 		marketplace.GET("/products", marketplaceH.ListProducts)
 		marketplace.GET("/products/:slug", marketplaceH.GetProduct)
+		// Reviews + related rail: MUST reuse the SAME :slug wildcard —
+		// gin panics if :slug and :id share one path segment.
+		marketplace.GET("/products/:slug/reviews", marketplaceH.ListReviews)
+		marketplace.GET("/products/:slug/related", marketplaceH.RelatedProducts)
 	}
 
 	// Developer API (plan §33): versioned, customer-API-key
@@ -1223,6 +1227,13 @@ func main() {
 		portal.GET("/reseller/licenses", portalResellerH.ListLicenses)
 		portal.GET("/reseller/commissions", portalResellerH.ListCommissions)
 		portal.GET("/reseller/prices", portalResellerH.ListPrices)
+
+		// Product reviews (Phase 6): one per (product, session email),
+		// starts pending; ownership enforced in the handler (404s).
+		reviewPortalH := handler.NewReviewPortalHandler(db)
+		portal.POST("/products/:id/reviews", reviewPortalH.Create)
+		portal.PATCH("/products/:id/reviews", reviewPortalH.Update)
+		portal.DELETE("/products/:id/reviews", reviewPortalH.Delete)
 	}
 
 	// Admin route layout: three groups under /admin, all sharing the
@@ -1360,6 +1371,31 @@ func main() {
 		admin.POST("/categories", categoryAdminH.Create)
 		admin.PATCH("/categories/:id", categoryAdminH.Update)
 		admin.DELETE("/categories/:id", categoryAdminH.Delete)
+
+		// Product review moderation (Phase 6).
+		reviewAdminH := handler.NewReviewAdminHandler(db)
+		admin.GET("/reviews", reviewAdminH.List)
+		admin.GET("/reviews/:id", reviewAdminH.Get)
+		admin.POST("/reviews/:id/approve", reviewAdminH.Approve)
+		admin.POST("/reviews/:id/reject", reviewAdminH.Reject)
+		admin.PUT("/reviews/:id/reply", reviewAdminH.Reply)
+		admin.DELETE("/reviews/:id", reviewAdminH.Delete)
+
+		// Enterprise SSO + SCIM (Phase 8 slice 1): configuration and
+		// provisioning tokens only — SAML/OIDC handshakes, SCIM sync
+		// endpoints and token middleware are documented future work.
+		ssoAdminH := handler.NewSSOAdminHandler(db)
+		admin.GET("/sso/connections", ssoAdminH.List)
+		admin.POST("/sso/connections", ssoAdminH.Create)
+		admin.GET("/sso/connections/:id", ssoAdminH.Get)
+		admin.PATCH("/sso/connections/:id", ssoAdminH.Update)
+		admin.DELETE("/sso/connections/:id", ssoAdminH.Delete)
+		admin.POST("/sso/connections/:id/enable", ssoAdminH.Enable)
+		admin.POST("/sso/connections/:id/disable", ssoAdminH.Disable)
+		admin.GET("/sso/tokens", ssoAdminH.ListTokens)
+		admin.POST("/sso/tokens", ssoAdminH.CreateToken)
+		admin.POST("/sso/tokens/:id/revoke", ssoAdminH.RevokeToken)
+		admin.DELETE("/sso/tokens/:id", ssoAdminH.DeleteToken)
 
 		// Reseller foundation (Phase 7): accounts + licence allocation.
 		resellerAdminH := handler.NewResellerAdminHandler(db)

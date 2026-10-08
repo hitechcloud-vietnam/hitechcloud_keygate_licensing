@@ -10,6 +10,8 @@ import { SiteConfigProvider } from "@/hooks/use-site-config"
 import { I18nProvider } from "@/i18n"
 import AcceptInvitePage from "@/pages/accept-invite"
 import AddonsPage from "@/pages/admin/addons"
+import AffiliateDetailPage from "@/pages/admin/affiliate-detail"
+import AffiliatesPage from "@/pages/admin/affiliates"
 import AnalyticsPage from "@/pages/admin/analytics"
 import APIKeysPage from "@/pages/admin/api-keys"
 import AuditPage from "@/pages/admin/audit"
@@ -23,6 +25,8 @@ import OrdersPage from "@/pages/admin/orders"
 import PlansPage from "@/pages/admin/plans"
 import ProductsPage from "@/pages/admin/products"
 import ReleasesPage from "@/pages/admin/releases"
+import ResellerDetailPage from "@/pages/admin/reseller-detail"
+import ResellersPage from "@/pages/admin/resellers"
 import SettingsPage from "@/pages/admin/settings"
 import TaxRatesPage from "@/pages/admin/tax-rates"
 import WebhooksPage from "@/pages/admin/webhooks"
@@ -94,6 +98,10 @@ createRoot(document.getElementById("root")!).render(
                       <Route path="tax-rates" element={<TaxRatesPage />} />
                       <Route path="orders" element={<OrdersPage />} />
                       <Route path="orders/:id" element={<OrderDetailPage />} />
+                      <Route path="resellers" element={<ResellersPage />} />
+                      <Route path="resellers/:id" element={<ResellerDetailPage />} />
+                      <Route path="affiliates" element={<AffiliatesPage />} />
+                      <Route path="affiliates/:id" element={<AffiliateDetailPage />} />
                       <Route path="analytics" element={<AnalyticsPage />} />
                       <Route path="audit" element={<AuditPage />} />
                       <Route path="customers" element={<CustomersPage />} />

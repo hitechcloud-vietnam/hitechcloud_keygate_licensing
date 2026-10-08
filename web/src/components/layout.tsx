@@ -6,12 +6,14 @@ import {
   Download,
   FileKey2,
   Gauge,
+  Handshake,
   Key,
   Layers,
   LayoutDashboard,
   LifeBuoy,
   Link2,
   LogOut,
+  Megaphone,
   Menu,
   MonitorSmartphone,
   Package,
@@ -79,6 +81,13 @@ export function AdminLayout() {
         { to: "/admin/orders", label: t("nav.orders"), icon: ShoppingCart },
         { to: "/admin/coupons", label: t("nav.coupons"), icon: Ticket },
         { to: "/admin/tax-rates", label: t("nav.taxRates"), icon: Receipt },
+      ],
+    },
+    {
+      label: t("nav.partners"),
+      items: [
+        { to: "/admin/resellers", label: t("nav.resellers"), icon: Handshake },
+        { to: "/admin/affiliates", label: t("nav.affiliates"), icon: Megaphone },
       ],
     },
     {

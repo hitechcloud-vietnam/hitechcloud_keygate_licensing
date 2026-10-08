@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -54,12 +55,33 @@ type marketplaceCatalog interface {
 
 var _ marketplaceCatalog = (*store.Store)(nil)
 
+// reviewReads is the review-side slice of store.Store: the rating
+// aggregates the product DTOs carry, and the review and related-
+// products reads the two new endpoints answer from. It is a second
+// seam beside marketplaceCatalog on purpose — the catalog doubles
+// that predate the review surfaces keep satisfying the first seam
+// untouched — and in production both seams are the same *store.Store
+// (see the constructor).
+type reviewReads interface {
+	productRefLookup
+	ListReviewsByProduct(ctx context.Context, productID, status string, p store.Page) ([]*model.Review, int, error)
+	RatingSummaryForProduct(ctx context.Context, productID string) (model.RatingAggregate, error)
+	RatingSummariesForProducts(ctx context.Context, ids map[string]struct{}) (map[string]model.RatingAggregate, error)
+	RelatedProducts(ctx context.Context, productID string, limit int) ([]*model.Product, error)
+}
+
+var _ reviewReads = (*store.Store)(nil)
+
 type MarketplaceHandler struct {
 	mk marketplaceCatalog
+	// rv is the review seam. A nil here means "no review surfaces" —
+	// only a double assembled without them can reach it; the cards
+	// then render zero aggregates and the review endpoints refuse.
+	rv reviewReads
 }
 
 func NewMarketplaceHandler(s *store.Store) *MarketplaceHandler {
-	return &MarketplaceHandler{mk: s}
+	return &MarketplaceHandler{mk: s, rv: s}
 }
 
 // marketplaceSortColumns is the whole of the ?sort= vocabulary the
@@ -164,9 +186,123 @@ func (h *MarketplaceHandler) GetProduct(c *gin.Context) {
 		return
 	}
 
-	out := marketplaceProductJSON(prod, catsBy[prod.ID], plansBy[prod.ID])
+	// The rating aggregate decorates the page: approved reviews only,
+	// and the zero value when none exist (or the review seam is
+	// absent) — the same honest "no published ratings yet" either way.
+	var agg model.RatingAggregate
+	if h.rv != nil {
+		agg, err = h.rv.RatingSummaryForProduct(c, prod.ID)
+		if err != nil {
+			response.Internal(c, err)
+			return
+		}
+	}
+
+	out := marketplaceProductJSON(prod, catsBy[prod.ID], plansBy[prod.ID], agg)
 	out["releases"] = releaseArray(rels)
 	response.OK(c, gin.H{"product": out})
+}
+
+// ListReviews — GET /public/marketplace/products/:id/reviews
+
+// The review section of a product page: one page of the product's
+// APPROVED reviews, newest first, with the aggregate beside them so a
+// client renders the stars without a second round trip. The approved
+// filter is not a parameter — the public side sees exactly what
+// moderation published, and the queue is the admin's alone.
+//
+// The payload is the review selection of reviewPublicJSON: no author
+// emails and no moderation status. An unknown product (and a lookup
+// that failed) answers the same quiet 404, as everywhere on this
+// surface.
+func (h *MarketplaceHandler) ListReviews(c *gin.Context) {
+	rv, ok := h.reviewReads()
+	if !ok {
+		response.Internal(c, errors.New("review surfaces not wired"))
+		return
+	}
+	prod, err := findProductByRef(c.Request.Context(), rv, reviewRefParam(c))
+	if err != nil {
+		response.NotFound(c, "product not found")
+		return
+	}
+	page := listPage(c)
+	revs, total, err := rv.ListReviewsByProduct(c.Request.Context(), prod.ID, model.ReviewStatusApproved, page)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	agg, err := rv.RatingSummaryForProduct(c.Request.Context(), prod.ID)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	listOK(c, "reviews", reviewPublicArray(revs), total, page, gin.H{
+		"rating_average_bps": agg.AverageBPS,
+		"rating_count":       agg.Count,
+	})
+}
+
+// RelatedProducts — GET /public/marketplace/products/:id/related
+
+// The "you may also like" rail of a product page: products sharing a
+// category with this one, itself excluded, newest first and capped at
+// store.RelatedProductsLimit. Rendered as the same product cards the
+// listing uses — categories, plans and rating aggregates included —
+// so a client has exactly one card shape to render. Same quiet 404
+// for an unknown product.
+func (h *MarketplaceHandler) RelatedProducts(c *gin.Context) {
+	rv, ok := h.reviewReads()
+	if !ok {
+		response.Internal(c, errors.New("review surfaces not wired"))
+		return
+	}
+	prod, err := findProductByRef(c.Request.Context(), rv, reviewRefParam(c))
+	if err != nil {
+		response.NotFound(c, "product not found")
+		return
+	}
+	// The store clamps to the rail's cap whatever this passes on.
+	prods, err := rv.RelatedProducts(c.Request.Context(), prod.ID, queryInt(c, "limit", store.RelatedProductsLimit))
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	items, err := h.productCards(c, prods)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	response.OK(c, gin.H{"products": items, "total": len(items)})
+}
+
+// reviewReads returns the review-side store reads when this handler
+// was wired with them. NewMarketplaceHandler always wires
+// *store.Store, which has them; a handler assembled around a
+// catalog-only double cannot serve the review endpoints at all.
+func (h *MarketplaceHandler) reviewReads() (reviewReads, bool) {
+	if h.rv == nil {
+		return nil, false
+	}
+	return h.rv, true
+}
+
+// ratingSummaries batch-loads the card aggregates for a page of
+// products: ONE query for the whole page
+// (store.RatingSummariesForProducts), never one per card — the
+// listing is the hottest public endpoint and a summary query per row
+// is how a catalog dies (the lesson of productCards itself). A
+// missing summary is the zero value: no approved reviews, no stars.
+
+func (h *MarketplaceHandler) ratingSummaries(c *gin.Context, ids []string) (map[string]model.RatingAggregate, error) {
+	if h.rv == nil {
+		return map[string]model.RatingAggregate{}, nil
+	}
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return h.rv.RatingSummariesForProducts(c.Request.Context(), set)
 }
 
 // productCards decorates a page of products with their categories and
@@ -189,9 +325,13 @@ func (h *MarketplaceHandler) productCards(c *gin.Context, prods []*model.Product
 	if err != nil {
 		return nil, err
 	}
+	aggs, err := h.ratingSummaries(c, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]gin.H, 0, len(prods))
 	for _, p := range prods {
-		out = append(out, marketplaceProductJSON(p, catsBy[p.ID], plansBy[p.ID]))
+		out = append(out, marketplaceProductJSON(p, catsBy[p.ID], plansBy[p.ID], aggs[p.ID]))
 	}
 	return out, nil
 }
@@ -213,7 +353,12 @@ func (h *MarketplaceHandler) productCards(c *gin.Context, prods []*model.Product
 // identifiers, Stripe price ids, per-licence limits (max_activations
 // and friends), entitlements and any licence material. The download
 // itself stays behind /license/download.
-func marketplaceProductJSON(p *model.Product, cats []*model.Category, plans []*model.Plan) gin.H {
+//
+// rating_average_bps and rating_count are the APPROVED-reviews
+// aggregate (zero when none): the stars a card shows are exactly the
+// stars moderation published, and the count is how many they are
+// drawn from. Bps, not a float — the same no-drift rule as money.
+func marketplaceProductJSON(p *model.Product, cats []*model.Category, plans []*model.Plan, agg model.RatingAggregate) gin.H {
 	images := p.Images
 	if images == nil {
 		images = []string{}
@@ -235,6 +380,8 @@ func marketplaceProductJSON(p *model.Product, cats []*model.Category, plans []*m
 		"minimum_supported_version": p.MinimumSupportedVersion,
 		"minimum_supported_message": p.MinimumSupportedMessage,
 		"created_at":                p.CreatedAt,
+		"rating_average_bps":        agg.AverageBPS,
+		"rating_count":              agg.Count,
 		"categories":                categoryArray(cats),
 		"plans":                     planArray(plans),
 	}

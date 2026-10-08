@@ -85,3 +85,67 @@ func marketplaceProductsQuery(db bun.IDB, f MarketplaceProductFilter, dest *[]*m
 	}
 	return applySort(q, sort, "product.id")
 }
+
+// RelatedProductsLimit is how many neighbours a product page's
+// "related products" rail shows. It is a rail, not a listing: capped
+// hard at 8 so one page cannot ask the store for a second catalog,
+// and the cap is the store's — whatever a request sent, this is the
+// most it can get.
+const RelatedProductsLimit = 8
+
+// clampRelatedLimit folds a requested size onto the rail's contract:
+// 8 at most, and "the rail's size" when the caller did not ask (or
+// asked for something nonsensical). The store clamps even though the
+// handler clamps too — a limit is cheap to enforce here and expensive
+// to forget somewhere else.
+func clampRelatedLimit(limit int) int {
+	if limit <= 0 {
+		return RelatedProductsLimit
+	}
+	if limit > RelatedProductsLimit {
+		return RelatedProductsLimit
+	}
+	return limit
+}
+
+// RelatedProducts answers "what else is like this one": products
+// sharing at least one category with the given product, the product
+// itself excluded, newest first, at most limit (≤ RelatedProductsLimit)
+// of them.
+//
+// Same-category is the whole of the relation — there is no
+// purchase-affinity data to draw on and inventing one would be worse
+// than the honest category neighbour. A product with no categories has
+// no relatives and reads as an empty list. A product sharing several
+// categories with one neighbour still appears once: the relation is an
+// EXISTS, not a join, so no duplicate rows can be produced to page
+// around.
+func (s *Store) RelatedProducts(ctx context.Context, productID string, limit int) ([]*model.Product, error) {
+	var out []*model.Product
+	q := relatedProductsQuery(s.DB, productID, clampRelatedLimit(limit), &out)
+	return out, q.Scan(ctx)
+}
+
+// relatedProductsQuery builds the related-rail query on its own so
+// its shape can be pinned without a database (see reviews_test.go):
+// which alias the qualifiers correlate against, and that the
+// neighbour relation is a plain EXISTS over the real join table.
+//
+// The correlation into the outer products table uses the bun alias
+// "product" (model.Product → FROM "products" AS "product"); a bare
+// products.id in the subquery would be a missing FROM-clause entry,
+// the bug class pinned in bun_alias_test.go. The subquery's own tables
+// (product_categories, twice: once for this product's facets, once for
+// the candidate's) are real table names — its little SQL, not subject
+// to bun's model aliasing.
+func relatedProductsQuery(db bun.IDB, productID string, limit int, dest *[]*model.Product) *bun.SelectQuery {
+	q := db.NewSelect().Model(dest).
+		Where("product.id <> ?", productID).
+		Where(`EXISTS (
+			SELECT 1 FROM product_categories mine
+			JOIN product_categories theirs ON theirs.category_id = mine.category_id
+			WHERE mine.product_id = ? AND theirs.product_id = product.id)`, productID)
+	// Newest first, with applySort's unique tiebreak so the rail
+	// cannot reshuffle between two renders of the same page.
+	return applySort(q, Sort{Expr: "product.created_at", Desc: true}, "product.id").Limit(limit)
+}

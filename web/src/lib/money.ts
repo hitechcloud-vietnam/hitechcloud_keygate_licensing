@@ -92,3 +92,13 @@ export function parseIntStrict(input: string): number | null {
   const n = Number(s)
   return Number.isSafeInteger(n) ? n : null
 }
+
+// formatMinorUnits renders a currency-less minor-unit integer with
+// digit grouping only ("1,234,567"). Partner ledger figures —
+// reseller commissions, affiliate conversions and payouts — carry no
+// currency: they are integer minor units of the order's own money,
+// and inventing an exponent here would move the decimal point. The
+// caller labels the number ("minor units") instead.
+export function formatMinorUnits(minor: number): string {
+  return new Intl.NumberFormat().format(Math.trunc(minor))
+}

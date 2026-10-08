@@ -699,6 +699,134 @@ export const admin = {
   createCategory: (data: CategoryInput) => post<Category>("/admin/categories", data),
   updateCategory: (id: string, data: Partial<CategoryInput>) => patch<Category>(`/admin/categories/${id}`, data),
   deleteCategory: (id: string) => del(`/admin/categories/${id}`),
+
+  // ─── Resellers (partner accounts + commission ledger + wholesale prices) ───
+  // Money is integer minor units and rates are integer basis points —
+  // never float. Commission accrual is idempotent per (reseller,
+  // order): a retried POST answers the original row, never a second
+  // payout. Delete refuses (409) while the reseller still owns
+  // licences (RESSELLER_HAS_ALLOCATIONS) or has commission rows
+  // (RESSELLER_HAS_COMMISSIONS).
+  listResellers: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ resellers: Reseller[] }>>(`/admin/resellers?${listQuery(params)}`),
+  getReseller: (id: string) => get<{ reseller: Reseller; license_count: number }>(`/admin/resellers/${id}`),
+  createReseller: (data: {
+    name: string
+    contact_email: string
+    status?: string
+    commission_bps?: number
+    notes?: string
+  }) => post<Reseller>("/admin/resellers", data),
+  updateReseller: (
+    id: string,
+    data: { name?: string; contact_email?: string; status?: string; commission_bps?: number; notes?: string },
+  ) => patch<Reseller>(`/admin/resellers/${id}`, data),
+  deleteReseller: (id: string) => del<void>(`/admin/resellers/${id}`),
+  // A licence belongs to at most one reseller: a second claim is 409
+  // ALREADY_ALLOCATED, and a licence_id naming nothing is 404
+  // LICENSE_NOT_FOUND.
+  allocateResellerLicense: (id: string, licenseId: string) =>
+    post<{ reseller_id: string; license_id: string }>(`/admin/resellers/${id}/licenses`, { license_id: licenseId }),
+  listResellerLicenses: (id: string, params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ licenses: License[] }>>(`/admin/resellers/${id}/licenses?${listQuery(params)}`),
+  deallocateResellerLicense: (id: string, licenseId: string) =>
+    del<void>(`/admin/resellers/${id}/licenses/${encodeURIComponent(licenseId)}`),
+  // Commission ledger. Status filter: accrued|approved|paid|cancelled.
+  listCommissions: (id: string, params?: { status?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ commissions: Commission[] }>>(`/admin/resellers/${id}/commissions?${listQuery(params)}`),
+  // bps is optional and defaults to the reseller's contract rate. A
+  // repeat for the same order answers the ORIGINAL row (200, not 201).
+  accrueCommission: (id: string, data: { order_id: string; basis_minor: number; bps?: number }) =>
+    post<Commission>(`/admin/resellers/${id}/commissions`, data),
+  // Body is optional ({paid_at?} RFC 3339); omitted means "now".
+  markCommissionPaid: (id: string, commissionId: string) =>
+    post<Commission>(`/admin/resellers/${id}/commissions/${commissionId}/paid`),
+  // Wholesale price overrides — the whole list is unpaged.
+  listPriceOverrides: (id: string) => get<Paged<{ prices: ResellerPriceOverride[] }>>(`/admin/resellers/${id}/prices`),
+  // PUT semantics: the (reseller, plan) pair is the whole identity.
+  setPriceOverride: (id: string, planId: string, data: { unit_amount_minor: number; currency: string }) =>
+    put<ResellerPriceOverride>(`/admin/resellers/${id}/prices/${encodeURIComponent(planId)}`, data),
+  deletePriceOverride: (id: string, planId: string) =>
+    del<void>(`/admin/resellers/${id}/prices/${encodeURIComponent(planId)}`),
+
+  // ─── Affiliates (referral program) ───
+  // Delete refuses (409) while conversions (AFFILIATE_HAS_CONVERSIONS)
+  // or payouts (AFFILIATE_HAS_PAYOUTS) exist — suspend instead.
+  listAffiliates: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ affiliates: Affiliate[] }>>(`/admin/affiliates?${listQuery(params)}`),
+  getAffiliate: (id: string) =>
+    get<{ affiliate: Affiliate; pending_commission_minor: number }>(`/admin/affiliates/${id}`),
+  createAffiliate: (data: {
+    name: string
+    contact_email: string
+    status?: string
+    commission_model?: string
+    commission_bps?: number
+    commission_minor?: number
+    payout_method?: string
+    notes?: string
+  }) => post<Affiliate>("/admin/affiliates", data),
+  updateAffiliate: (
+    id: string,
+    data: {
+      name?: string
+      contact_email?: string
+      status?: string
+      commission_model?: string
+      commission_bps?: number
+      commission_minor?: number
+      payout_method?: string
+      notes?: string
+    },
+  ) => patch<Affiliate>(`/admin/affiliates/${id}`, data),
+  deleteAffiliate: (id: string) => del<void>(`/admin/affiliates/${id}`),
+  // Referral codes. The handle is immutable after creation; a delete
+  // refuses (409 REFERRAL_CODE_HAS_CONVERSIONS) while conversions
+  // point at it — deactivate instead.
+  listReferralCodes: (id: string, params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ codes: ReferralCode[] }>>(`/admin/affiliates/${id}/codes?${listQuery(params)}`),
+  createReferralCode: (id: string, data: { code: string; landing_url?: string; active?: boolean }) =>
+    post<ReferralCode>(`/admin/affiliates/${id}/codes`, data),
+  updateReferralCode: (id: string, codeId: string, data: { landing_url?: string; active?: boolean }) =>
+    patch<ReferralCode>(`/admin/affiliates/${id}/codes/${encodeURIComponent(codeId)}`, data),
+  deleteReferralCode: (id: string, codeId: string) =>
+    del<void>(`/admin/affiliates/${id}/codes/${encodeURIComponent(codeId)}`),
+  // Conversions. Status filter: pending|approved|paid|rejected|reversed.
+  // The three review decisions live outside the affiliate scope
+  // (POST /admin/conversions/:id/…) and share the state machine:
+  // illegal moves are 409 CONVERSION_TRANSITION_INVALID, and a
+  // conversion a requested payout has claimed is frozen (409
+  // CONVERSION_IN_PAYOUT — fail that payout first).
+  listAffiliateConversions: (id: string, params?: { status?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ conversions: AffiliateConversion[] }>>(`/admin/affiliates/${id}/conversions?${listQuery(params)}`),
+  approveConversion: (conversionId: string) =>
+    post<AffiliateConversion>(`/admin/conversions/${encodeURIComponent(conversionId)}/approve`),
+  rejectConversion: (conversionId: string) =>
+    post<AffiliateConversion>(`/admin/conversions/${encodeURIComponent(conversionId)}/reject`),
+  reverseConversion: (conversionId: string) =>
+    post<AffiliateConversion>(`/admin/conversions/${encodeURIComponent(conversionId)}/reverse`),
+  // Payouts. Create claims whole conversions oldest-first (a repeat
+  // for the same order is never double-paid). amount_minor is an
+  // upper bound — omitted or 0 settles the whole accrued balance.
+  // Only a requested payout can move (409 PAYOUT_TRANSITION_INVALID).
+  listAffiliatePayouts: (id: string, params?: { limit?: number; offset?: number }) =>
+    get<Paged<{ payouts: AffiliatePayout[] }>>(`/admin/affiliates/${id}/payouts?${listQuery(params)}`),
+  createAffiliatePayout: (id: string, data: { amount_minor?: number; notes?: string }) =>
+    post<AffiliatePayout>(`/admin/affiliates/${id}/payouts`, data),
+  markPayoutPaid: (payoutId: string) => post<AffiliatePayout>(`/admin/payouts/${encodeURIComponent(payoutId)}/paid`),
+  markPayoutFailed: (payoutId: string, notes: string) =>
+    post<AffiliatePayout>(`/admin/payouts/${encodeURIComponent(payoutId)}/failed`, { notes }),
+
+  // ─── Order billing block + invoice state transitions ───
+  // PATCH merge semantics (see OrderBillingPatch). Invoice moves:
+  // a paid invoice is never voidable (409 INVOICE_NOT_VOIDABLE —
+  // refund the order first) and any other illegal move is 409
+  // INVOICE_TRANSITION_INVALID. Both answer the updated invoice.
+  updateOrderBilling: (id: string, data: OrderBillingPatch) => patch<Order>(`/admin/orders/${id}/billing`, data),
+  voidOrderInvoice: (orderId: string, invoiceId: string) =>
+    post<OrderInvoice>(`/admin/orders/${orderId}/invoices/${encodeURIComponent(invoiceId)}/void`),
+  markOrderInvoiceUncollectible: (orderId: string, invoiceId: string) =>
+    post<OrderInvoice>(`/admin/orders/${orderId}/invoices/${encodeURIComponent(invoiceId)}/mark-uncollectible`),
 }
 
 // ─── Types ───
@@ -1309,6 +1437,39 @@ export interface Order {
   created_at: string
   updated_at: string
   items?: OrderItem[]
+  // The billing block (PO / invoice workflow). All are nullable
+  // server-side and omitted from the JSON when empty, so a missing key
+  // reads the same as an empty string.
+  billing_name?: string
+  billing_company?: string
+  billing_address_line1?: string
+  billing_address_line2?: string
+  billing_city?: string
+  billing_region?: string
+  billing_postal_code?: string
+  billing_country?: string
+  customer_tax_id?: string
+  po_number?: string
+  billing_email?: string
+}
+
+// OrderBillingPatch is the body of PATCH /admin/orders/:id/billing.
+// The three-intent convention the endpoint merges by: an ABSENT field
+// keeps its stored value, a field sent as "" (or only spaces) is
+// CLEARED, and a field with a value is set (trimmed, country folded
+// to upper case). Build the body from changed fields only.
+export interface OrderBillingPatch {
+  billing_name?: string
+  billing_company?: string
+  billing_address_line1?: string
+  billing_address_line2?: string
+  billing_city?: string
+  billing_region?: string
+  billing_postal_code?: string
+  billing_country?: string
+  customer_tax_id?: string
+  po_number?: string
+  billing_email?: string
 }
 
 // OrderInvoice is the ledger's billing document — one per order — not
@@ -1318,7 +1479,9 @@ export interface OrderInvoice {
   id: string
   order_id: string
   invoice_number: string
-  status: "draft" | "open" | "paid" | "void"
+  // The full invoice vocabulary (model.InvoiceStatus*): uncollectible
+  // (given up on) and refunded round out the draft/open/paid/void core.
+  status: "draft" | "open" | "paid" | "void" | "uncollectible" | "refunded"
   currency: string
   subtotal_minor: number
   discount_minor: number
@@ -1328,6 +1491,11 @@ export interface OrderInvoice {
   due_at?: string
   paid_at?: string
   created_at: string
+  // Stamped by the two admin state transitions (void /
+  // mark-uncollectible). Nullable and additive: a row predating them
+  // simply omits them.
+  voided_at?: string
+  uncollectible_at?: string
 }
 
 export interface QuoteLineInput {
@@ -1518,6 +1686,115 @@ export interface MarketplaceRelease {
   published_at: string
   artifacts: MarketplaceArtifact[]
 }
+// ─── Resellers & affiliates (partner programs) ───
+//
+// Money is integer minor units and every rate is integer basis points
+// (10000 = 100%) — never float. Partner commission amounts carry no
+// currency (they are ledger figures), so they display as grouped
+// integers via formatMinorUnits (lib/money.ts).
+
+export interface Reseller {
+  id: string
+  name: string
+  contact_email: string
+  status: "active" | "suspended"
+  // Contract share of a sale in basis points (10000 = 100%).
+  commission_bps: number
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+// Commission is one ledger row: what a reseller earned on an order.
+// Basis, rate and amount are snapshotted at accrual, so the row is
+// self-contained. Append-mostly: accrual creates it, the payout mark
+// stamps it.
+export interface Commission {
+  id: string
+  reseller_id: string
+  order_id: string
+  basis_minor: number
+  bps: number
+  amount_minor: number
+  status: "accrued" | "approved" | "paid" | "cancelled"
+  paid_at?: string
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+// ResellerPriceOverride is the wholesale price one reseller pays for
+// one plan. Configuration keyed by (reseller, plan), overwritten in
+// place when the deal changes.
+export interface ResellerPriceOverride {
+  reseller_id: string
+  plan_id: string
+  unit_amount_minor: number
+  currency: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Affiliate {
+  id: string
+  name: string
+  contact_email: string
+  status: "active" | "suspended"
+  // Which of the two commission fields pays: percent uses
+  // commission_bps, fixed uses commission_minor. Both are stored
+  // whatever the model, so switching is an edit, not a migration.
+  commission_model: "percent" | "fixed"
+  commission_bps: number
+  commission_minor: number
+  payout_method: string
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+// ReferralCode is one shareable handle (/r/<code>, the htc_ref
+// cookie). The handle is immutable; landing_url and active are the
+// editable parts. Deletion is refused while conversions exist.
+export interface ReferralCode {
+  id: string
+  affiliate_id: string
+  code: string
+  landing_url?: string
+  active: boolean
+  created_at: string
+}
+
+// AffiliateConversion is one attributed sale. Exactly one row per
+// order (idempotent). Status: pending → approved|rejected|reversed;
+// approved|paid can only be clawed back (reversed); paid is reached
+// only through a payout settling it.
+export interface AffiliateConversion {
+  id: string
+  affiliate_id: string
+  code_id: string
+  order_id: string
+  user_id?: string
+  order_total_minor: number
+  commission_minor: number
+  status: "pending" | "approved" | "paid" | "rejected" | "reversed"
+  payout_id?: string
+  created_at: string
+  updated_at: string
+}
+
+// AffiliatePayout settles whole conversions. Only a requested payout
+// moves (to paid or failed); a failed one returns its claims to the
+// accrued pool.
+export interface AffiliatePayout {
+  id: string
+  affiliate_id: string
+  amount_minor: number
+  status: "requested" | "paid" | "failed"
+  paid_at?: string
+  notes: string
+  created_at: string
+}
+
 export interface MarketplaceProduct {
   id: string
   name: string

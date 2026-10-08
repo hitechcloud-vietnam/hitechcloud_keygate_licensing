@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, RotateCcw } from "lucide-react"
+import { ArrowLeft, Ban, RotateCcw, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
@@ -25,10 +25,12 @@ import {
   DataTableHeader,
   DataTableRow,
 } from "@/components/ui/data-table"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { type TranslationKeys, useI18n } from "@/i18n"
-import type { OrderInvoice } from "@/lib/api"
-import { admin } from "@/lib/api"
+import type { Order, OrderBillingPatch, OrderInvoice } from "@/lib/api"
+import { ApiError, admin } from "@/lib/api"
 import { formatBps, formatMinor } from "@/lib/money"
 import { formatDate } from "@/lib/utils"
 import { statusBadgeColor } from "@/pages/admin/orders"
@@ -38,6 +40,8 @@ export default function OrderDetailPage() {
   const qc = useQueryClient()
   const { id = "" } = useParams()
   const [refunding, setRefunding] = useState(false)
+  const [voiding, setVoiding] = useState<OrderInvoice | null>(null)
+  const [uncollectible, setUncollectible] = useState<OrderInvoice | null>(null)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["admin", "orders", id],
@@ -61,6 +65,40 @@ export default function OrderDetailPage() {
       setRefunding(false)
     },
     onError: (e: Error) => showToast(e.message, "error"),
+  })
+
+  // The two invoice moves answer 409 with codes that say exactly what
+  // is wrong — a paid invoice is not voidable (refund the order first)
+  // and any other illegal move is refused by the state machine. Both
+  // are surfaced with text that tells the admin what to do next.
+  const invoiceError = (e: Error, notVoidable: boolean) => {
+    if (e instanceof ApiError && e.code === "INVOICE_NOT_VOIDABLE" && notVoidable) {
+      showToast(t("orders.errInvoiceNotVoidable"), "error")
+    } else if (e instanceof ApiError && e.code === "INVOICE_TRANSITION_INVALID") {
+      showToast(t("orders.errInvoiceTransition"), "error")
+    } else {
+      showToast(e.message, "error")
+    }
+  }
+
+  const voidMut = useMutation({
+    mutationFn: (invoiceId: string) => admin.voidOrderInvoice(id, invoiceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "orders"] })
+      showToast(t("toast.invoiceVoided"), "success")
+      setVoiding(null)
+    },
+    onError: (e: Error) => invoiceError(e, true),
+  })
+
+  const uncollectibleMut = useMutation({
+    mutationFn: (invoiceId: string) => admin.markOrderInvoiceUncollectible(id, invoiceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "orders"] })
+      showToast(t("toast.invoiceUncollectible"), "success")
+      setUncollectible(null)
+    },
+    onError: (e: Error) => invoiceError(e, false),
   })
 
   if (isLoading) {
@@ -204,6 +242,10 @@ export default function OrderDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* key on updated_at so the form re-reads the stored billing
+              block after a save refetches the order. */}
+          <BillingCard key={order.updated_at} order={order} />
         </div>
 
         <div className="space-y-6">
@@ -272,6 +314,33 @@ export default function OrderDetailPage() {
                           {t("orders.paidAt")}: {formatDate(inv.paid_at)}
                         </span>
                       </div>
+                      {(inv.voided_at || inv.uncollectible_at) && (
+                        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                          {inv.voided_at && (
+                            <span>
+                              {t("orders.invoiceVoidedAt")}: {formatDate(inv.voided_at)}
+                            </span>
+                          )}
+                          {inv.uncollectible_at && (
+                            <span>
+                              {t("orders.invoiceUncollectibleAt")}: {formatDate(inv.uncollectible_at)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {/* Terminal invoices are done — void and refunded
+                          never move again. The rest carry both moves;
+                          a paid one is refused with "refund first". */}
+                      {inv.status !== "void" && inv.status !== "refunded" && (
+                        <div className="flex justify-end gap-2">
+                          <Button size="sm" variant="outline" onClick={() => setVoiding(inv)}>
+                            <Ban className="h-4 w-4 mr-2" /> {t("orders.invoiceVoid")}
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setUncollectible(inv)}>
+                            <TriangleAlert className="h-4 w-4 mr-2" /> {t("orders.invoiceUncollectible")}
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -298,7 +367,143 @@ export default function OrderDetailPage() {
           </div>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={!!voiding} onOpenChange={() => setVoiding(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("orders.invoiceVoidTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("orders.invoiceVoidDesc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => voiding && voidMut.mutate(voiding.id)}
+            >
+              {t("orders.invoiceVoid")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!uncollectible} onOpenChange={() => setUncollectible(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("orders.invoiceUncollectibleTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("orders.invoiceUncollectibleDesc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => uncollectible && uncollectibleMut.mutate(uncollectible.id)}
+            >
+              {t("orders.invoiceUncollectible")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  )
+}
+
+// ─── Billing block (PO / invoice workflow) ───
+//
+// PATCH /admin/orders/:id/billing merges, it does not replace: an
+// ABSENT field keeps its stored value, a field sent as "" (or only
+// spaces) is CLEARED, and a field with a value is set. The form
+// therefore sends only the fields the admin actually touched — a
+// field left alone is never resent, and an emptied field is resent as
+// "" so the ledger drops it.
+const BILLING_FIELDS: { key: keyof OrderBillingPatch; label: TranslationKeys }[] = [
+  { key: "billing_name", label: "orders.billingName" },
+  { key: "billing_company", label: "orders.billingCompany" },
+  { key: "billing_address_line1", label: "orders.billingAddress1" },
+  { key: "billing_address_line2", label: "orders.billingAddress2" },
+  { key: "billing_city", label: "orders.billingCity" },
+  { key: "billing_region", label: "orders.billingRegion" },
+  { key: "billing_postal_code", label: "orders.billingPostal" },
+  { key: "billing_country", label: "orders.billingCountry" },
+  { key: "customer_tax_id", label: "orders.customerTaxId" },
+  { key: "po_number", label: "orders.poNumber" },
+  { key: "billing_email", label: "orders.billingEmail" },
+]
+
+function BillingCard({ order }: { order: Order }) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const initial = (): Record<string, string> => {
+    const out: Record<string, string> = {}
+    for (const f of BILLING_FIELDS) out[f.key] = order[f.key] ?? ""
+    return out
+  }
+  const [values, setValues] = useState<Record<string, string>>(initial)
+  const setValue = (key: string, v: string) => setValues((prev) => ({ ...prev, [key]: v }))
+
+  const changed = BILLING_FIELDS.some((f) => (values[f.key] ?? "") !== (initial()[f.key] ?? ""))
+
+  const saveMut = useMutation({
+    mutationFn: (body: OrderBillingPatch) => admin.updateOrderBilling(order.id, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "orders"] })
+      showToast(t("toast.billingSaved"), "success")
+    },
+    onError: (e: Error) => showToast(e.message, "error"),
+  })
+
+  const submit = () => {
+    const body: Record<string, string | undefined> = {}
+    for (const f of BILLING_FIELDS) {
+      const v = values[f.key] ?? ""
+      if (v !== (initial()[f.key] ?? "")) body[f.key] = v
+    }
+    if (Object.keys(body).length === 0) {
+      showToast(t("orders.billingUnchanged"), "success")
+      return
+    }
+    saveMut.mutate(body as OrderBillingPatch)
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{t("orders.billing")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            submit()
+          }}
+          className="space-y-4"
+        >
+          <p className="text-xs text-muted-foreground">{t("orders.billingHint")}</p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {BILLING_FIELDS.map((f) => (
+              <div key={f.key} className="space-y-2">
+                <Label>{t(f.label)}</Label>
+                <Input
+                  value={values[f.key] ?? ""}
+                  onChange={(e) => setValue(f.key, e.target.value)}
+                  inputMode={f.key === "billing_postal_code" ? "numeric" : undefined}
+                />
+                {f.key === "billing_country" && (
+                  <p className="text-xs text-muted-foreground">{t("orders.billingCountryHint")}</p>
+                )}
+                {f.key === "customer_tax_id" && (
+                  <p className="text-xs text-muted-foreground">{t("orders.customerTaxIdHint")}</p>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end">
+            <Button type="submit" disabled={saveMut.isPending || !changed}>
+              {saveMut.isPending ? t("common.loading") : t("orders.saveBilling")}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   )
 }
 
