@@ -114,6 +114,51 @@ func listSort(c *gin.Context, allowed map[string]sortCol, defCol string) (store.
 	return store.Sort{Expr: col.Expr, Desc: desc}, true
 }
 
+// listSortOrDefault is listSort for the endpoints whose contract is
+// "sorting is a nicety, never an error": unknown lists, sorters and
+// hand-written scripts must all keep working against them.
+//
+// An unknown or empty ?sort= keeps the endpoint's default ordering
+// rather than refusing the request, and a malformed ?order= falls
+// back to descending. What is NOT relaxed is the security boundary:
+// the ORDER BY is still built only from the allowlist — a name that
+// is not a key simply resolves to the default column, so nothing a
+// caller typed is ever spliced into the query. A blank ?sort= is the
+// same call as no ?sort= at all.
+//
+// The two readings of "unknown sort" — refuse vs serve the default —
+// are both in the API: the license and marketplace lists refuse
+// (listSort, 400 INVALID_SORT, documented in docs/api-contract.md),
+// and the admin ledger lists serve the default. Each endpoint's
+// behaviour is pinned by its own tests; mixing them on one endpoint
+// would be the only wrong answer.
+func listSortOrDefault(c *gin.Context, allowed map[string]sortCol, defCol string) store.Sort {
+	name := c.Query("sort")
+	if name == "" {
+		name = defCol
+	}
+	col, ok := allowed[name]
+	if !ok {
+		// Unknown column: keep today's default ordering. The default
+		// is in the map by contract (every allowlist names its own
+		// default); the zero col on a broken map sorts by nothing and
+		// applySort still appends its tiebreaker.
+		col = allowed[defCol]
+	}
+	desc := col.Desc
+	switch c.Query("order") {
+	case "":
+		// Not asked for: the column's natural direction.
+	case "asc":
+		desc = false
+	case "desc":
+		desc = true
+	default:
+		desc = true
+	}
+	return store.Sort{Expr: col.Expr, Desc: desc}
+}
+
 // clipForMessage bounds a piece of the request that is quoted back in
 // an error.
 //

@@ -41,7 +41,7 @@ func TestRefundTableAlias(t *testing.T) {
 		t.Errorf("model.Refund must alias to \"refund\"; got:\n%s", raw)
 	}
 
-	q := refundSelectByOrder(db, "ord_1")
+	q := refundSelectByOrder(db, "ord_1", Sort{})
 	raw, err = q.AppendQuery(db.QueryGen(), nil)
 	if err != nil {
 		t.Fatalf("build list query: %v", err)
@@ -159,7 +159,7 @@ func TestRefundLedgerSync(t *testing.T) {
 	}
 
 	// The list is newest-first and total: three rows.
-	rows, err := s.ListRefundsByOrder(ctx, o.ID)
+	rows, err := s.ListRefundsByOrder(ctx, o.ID, Sort{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

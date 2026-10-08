@@ -9,10 +9,11 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { ListEmptyState } from "@/components/empty-state"
 import { NotificationRow } from "@/components/notification-bell"
+import { SortBar } from "@/components/sort-bar"
 import { toastError } from "@/components/toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { DataTablePagination, useServerPagination } from "@/components/ui/data-table"
+import { DataTablePagination, useServerPagination, useServerSort } from "@/components/ui/data-table"
 import { Label } from "@/components/ui/label"
 import { useI18n } from "@/i18n"
 import { type NotificationItem, portal } from "@/lib/api"
@@ -22,11 +23,15 @@ export default function NotificationsPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [unreadOnly, setUnreadOnly] = useState(false)
-  const pg = useServerPagination(20, [unreadOnly])
+  // Server-side sorting (plan §70): the feed reads newest first by
+  // default; the SortBar re-asks the server for another order. A
+  // re-sort joins the filters so the pager lands on the first page.
+  const srt = useServerSort("created_at", "desc")
+  const pg = useServerPagination(20, [unreadOnly, srt.sort, srt.order])
 
   const { data, isLoading } = useQuery({
-    queryKey: ["portal", "notifications", "page", unreadOnly, pg.page, pg.pageSize],
-    queryFn: () => portal.listNotifications({ unread_only: unreadOnly || undefined, ...pg.params }),
+    queryKey: ["portal", "notifications", "page", unreadOnly, srt.sort, srt.order, pg.page, pg.pageSize],
+    queryFn: () => portal.listNotifications({ unread_only: unreadOnly || undefined, ...srt.params, ...pg.params }),
     refetchOnWindowFocus: true,
   })
   const { items: notifications, total, totalPages } = pg.from(data, data?.notifications)
@@ -62,17 +67,30 @@ export default function NotificationsPage() {
         </Button>
       </div>
 
-      <div className="flex items-center gap-2">
-        <input
-          type="checkbox"
-          id="notifications-unread-only"
-          checked={unreadOnly}
-          onChange={(e) => setUnreadOnly(e.target.checked)}
-          className="h-4 w-4 rounded border-input accent-primary"
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="notifications-unread-only"
+            checked={unreadOnly}
+            onChange={(e) => setUnreadOnly(e.target.checked)}
+            className="h-4 w-4 rounded border-input accent-primary"
+          />
+          <Label htmlFor="notifications-unread-only" className="font-normal">
+            {t("notifications.unreadOnly")}
+          </Label>
+        </div>
+        {/* The feed is a card list, not a table, so its column
+            headers live in this toolbar above the rows. */}
+        <SortBar
+          sort={srt}
+          columns={[
+            { column: "created_at", label: t("common.created"), firstOrder: "desc" },
+            { column: "event", label: t("notifications.colEvent"), firstOrder: "asc" },
+            { column: "priority", label: t("notifications.colPriority"), firstOrder: "desc" },
+            { column: "read_at", label: t("notifications.colRead"), firstOrder: "desc" },
+          ]}
         />
-        <Label htmlFor="notifications-unread-only" className="font-normal">
-          {t("notifications.unreadOnly")}
-        </Label>
       </div>
 
       <Card>

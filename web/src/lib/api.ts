@@ -351,7 +351,15 @@ export const portal = {
   // the UI renders it through notifications.events.* (see
   // components/notification-bell). :id/read and read-all are
   // idempotent, so a click-through retry never fails.
-  listNotifications: (params?: { unread_only?: boolean; limit?: number; offset?: number }) =>
+  // sort ∈ {created_at, event, priority, read_at}; unknown keys keep
+  // the default order (created_at desc).
+  listNotifications: (params?: {
+    unread_only?: boolean
+    sort?: string
+    order?: "asc" | "desc"
+    limit?: number
+    offset?: number
+  }) =>
     get<Paged<{ notifications: NotificationItem[]; unread_count: number }>>(
       `/portal/notifications?${listQuery(params)}`,
     ),
@@ -359,6 +367,20 @@ export const portal = {
   markNotificationRead: (id: string) =>
     post<{ status?: string }>(`/portal/notifications/${encodeURIComponent(id)}/read`),
   markAllNotificationsRead: () => post<{ status?: string; updated?: number }>("/portal/notifications/read-all"),
+
+  // ─── Privacy: data export + account deletion (plan §82) ───
+  // exportAccount returns everything the platform holds about the
+  // account as one JSON document; the page wraps it in a Blob for the
+  // download. The payload carries API key / webhook METADATA only
+  // (never secrets or hashes); license keys are included — they are
+  // the account's own credentials.
+  exportAccount: () => get<AccountExport>("/portal/export"),
+  // deleteAccount anonymizes the account. `confirm` must be the
+  // account email (compared case-insensitively) or the exact phrase
+  // "DELETE MY ACCOUNT"; anything else is 400
+  // PRIVACY_CONFIRMATION_MISMATCH and nothing changes. Financial
+  // records are preserved server-side (see the response's `retained`).
+  deleteAccount: (confirm: string) => post<AccountAnonymizeResult>("/portal/delete-account", { confirm }),
 }
 
 // ─── Admin ───
@@ -381,8 +403,17 @@ export type Paged<T> = T & { total: number; limit: number; offset: number }
 export const admin = {
   stats: () => get<Stats>("/admin/stats"),
 
-  listProducts: (params?: { search?: string; type?: string; limit?: number; offset?: number }) =>
-    get<Paged<{ products: Product[] }>>(`/admin/products?${listQuery(params)}`),
+  // sort/order are server-side ordering (plan §70): products accept
+  // created_at, name, slug, type, updated_at; an unknown key is
+  // ignored by the server and keeps the default (created_at desc).
+  listProducts: (params?: {
+    search?: string
+    type?: string
+    sort?: string
+    order?: "asc" | "desc"
+    limit?: number
+    offset?: number
+  }) => get<Paged<{ products: Product[] }>>(`/admin/products?${listQuery(params)}`),
   getProduct: (id: string) => get<Product>(`/admin/products/${id}`),
   createProduct: (data: {
     name: string
@@ -602,10 +633,14 @@ export const admin = {
   getFloatingSessions: (id: string, params?: { limit?: number; offset?: number }) =>
     get<Paged<{ sessions: FloatingSession[]; active: number }>>(`/admin/licenses/${id}/floating?${listQuery(params)}`),
 
+  // sort ∈ {created_at, entity, action, actor}; unknown keys keep the
+  // default order (created_at desc).
   listAuditLogs: (params?: {
     entity?: string
     entity_id?: string
     product_id?: string
+    sort?: string
+    order?: "asc" | "desc"
     offset?: number
     limit?: number
   }) => {
@@ -613,14 +648,20 @@ export const admin = {
     if (params?.entity) q.set("entity", params.entity)
     if (params?.entity_id) q.set("entity_id", params.entity_id)
     if (params?.product_id) q.set("product_id", params.product_id)
+    if (params?.sort) q.set("sort", params.sort)
+    if (params?.order) q.set("order", params.order)
     if (params?.offset) q.set("offset", String(params.offset))
     if (params?.limit) q.set("limit", String(params.limit))
     return get<{ audit_logs: AuditLog[]; total: number }>(`/admin/audit-logs?${q}`)
   },
 
-  listUsers: (params?: { search?: string; offset?: number; limit?: number }) => {
+  // sort ∈ {created_at, email, name}; unknown keys keep the default
+  // order (created_at desc).
+  listUsers: (params?: { search?: string; sort?: string; order?: "asc" | "desc"; offset?: number; limit?: number }) => {
     const q = new URLSearchParams()
     if (params?.search) q.set("search", params.search)
+    if (params?.sort) q.set("sort", params.sort)
+    if (params?.order) q.set("order", params.order)
     if (params?.offset) q.set("offset", String(params.offset))
     if (params?.limit) q.set("limit", String(params.limit))
     return get<{ users: User[]; total: number }>(`/admin/users?${q}`)
@@ -670,10 +711,13 @@ export const admin = {
     }>("/admin/system/update-check"),
 
   // ─── Releases (industry-standard bundle model) ───
+  // sort ∈ {created_at, version, published_at, status, channel}.
   listReleases: (params?: {
     product_id?: string
     channel?: string
     status?: string
+    sort?: string
+    order?: "asc" | "desc"
     limit?: number
     offset?: number
   }) => {
@@ -681,6 +725,8 @@ export const admin = {
     if (params?.product_id) q.set("product_id", params.product_id)
     if (params?.channel) q.set("channel", params.channel)
     if (params?.status) q.set("status", params.status)
+    if (params?.sort) q.set("sort", params.sort)
+    if (params?.order) q.set("order", params.order)
     if (params?.limit) q.set("limit", String(params.limit))
     if (params?.offset) q.set("offset", String(params.offset))
     return get<{ releases: Release[]; total: number; limit: number; offset: number }>(`/admin/releases?${q}`)
@@ -733,7 +779,8 @@ export const admin = {
     get<{ pubkey: string }>(`/admin/products/${productId}/signing-key/tauri-pubkey`),
 
   // ─── Commerce: coupons, tax rates, orders (Phase 4) ───
-  listCoupons: (params?: { search?: string; limit?: number; offset?: number }) =>
+  // sort ∈ {created_at, code, type, expires_at, redemptions, active}.
+  listCoupons: (params?: { search?: string; sort?: string; order?: "asc" | "desc"; limit?: number; offset?: number }) =>
     get<Paged<{ coupons: Coupon[] }>>(`/admin/coupons?${listQuery(params)}`),
   getCoupon: (id: string) => get<Coupon>(`/admin/coupons/${id}`),
   createCoupon: (data: CouponInput) => post<Coupon>("/admin/coupons", data),
@@ -751,13 +798,31 @@ export const admin = {
   updateTaxRate: (id: string, data: Partial<TaxRateInput>) => patch<TaxRate>(`/admin/tax-rates/${id}`, data),
   deleteTaxRate: (id: string) => del(`/admin/tax-rates/${id}`),
 
-  listOrders: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
-    get<Paged<{ orders: Order[] }>>(`/admin/orders?${listQuery(params)}`),
+  // sort ∈ {created_at, order_number, customer, status, total,
+  // paid_at, updated_at}.
+  listOrders: (params?: {
+    search?: string
+    status?: string
+    sort?: string
+    order?: "asc" | "desc"
+    limit?: number
+    offset?: number
+  }) => get<Paged<{ orders: Order[] }>>(`/admin/orders?${listQuery(params)}`),
   getOrder: (id: string) => get<{ order: Order; invoices: OrderInvoice[] }>(`/admin/orders/${id}`),
   // Refund takes no body: the server stamps the refund time itself.
   refundOrder: (id: string) => post<Order>(`/admin/orders/${id}/refund`),
-  listOrderInvoices: (id: string, params?: { limit?: number; offset?: number }) =>
-    get<Paged<{ invoices: OrderInvoice[] }>>(`/admin/orders/${id}/invoices?${listQuery(params)}`),
+  // sort ∈ {created_at, invoice_number, status, total, paid_at,
+  // due_at}; the invoice list's natural order is created_at ASC
+  // (oldest first) unlike the other ledgers.
+  listOrderInvoices: (
+    id: string,
+    params?: { sort?: string; order?: "asc" | "desc"; limit?: number; offset?: number },
+  ) => get<Paged<{ invoices: OrderInvoice[] }>>(`/admin/orders/${id}/invoices?${listQuery(params)}`),
+  // The order's refund ledger (plan §79), one row per refund issued.
+  // sort ∈ {created_at, amount, status, provider}, default created_at
+  // desc. The rows carry their own shape, not the order's.
+  listOrderRefunds: (id: string, params?: { sort?: string; order?: "asc" | "desc" }) =>
+    get<{ refunds: Refund[] }>(`/admin/orders/${id}/refunds?${listQuery(params)}`),
   // Price preview without persistence — registered as /admin/quotes,
   // outside /orders/:id so it cannot collide with that param route.
   quoteOrder: (data: QuoteRequest) => post<QuoteResult>("/admin/quotes", data),
@@ -1005,6 +1070,13 @@ export const admin = {
   // Reset drops the stored value (and the secret) back to the
   // default / env fallback for one key.
   resetConfigKey: (key: string) => del<{ reset: string }>(`/admin/config/${encodeURIComponent(key)}`),
+
+  // ─── Privacy (plan §82): admin-side export + anonymize ───
+  // The same document / anonymization the user can run on their own
+  // account, for any user, audit-logged (privacy.export /
+  // privacy.anonymize) with the admin as actor.
+  exportUser: (id: string) => get<AccountExport>(`/admin/users/${encodeURIComponent(id)}/export`),
+  anonymizeUser: (id: string) => post<AccountAnonymizeResult>(`/admin/users/${encodeURIComponent(id)}/anonymize`),
 }
 
 // ─── Types ───
@@ -1676,6 +1748,28 @@ export interface OrderInvoice {
   uncollectible_at?: string
 }
 
+// Refund is one row of an order's refund ledger (plan §79) — one row
+// per refund issued against the order. Money is int64 minor units;
+// payment_provider says who moved (or was asked to move) the money:
+// stripe | pay2s | zalopay | payos | manual.
+export interface Refund {
+  // BIGSERIAL row id — the ledger keeps integer ids, unlike the
+  // uuid TEXT ids of the entities around it.
+  id: number
+  order_id: string
+  payment_provider: string
+  // Gateway handle of the payment refunded; empty for manual refunds.
+  provider_ref?: string
+  trans_id?: string
+  amount_minor: number
+  currency: string
+  reason?: string
+  status: "pending" | "succeeded" | "failed"
+  refunded_by?: string
+  created_at: string
+  updated_at: string
+}
+
 export interface QuoteLineInput {
   sku?: string
   product_id?: string
@@ -2129,6 +2223,58 @@ export interface NotificationItem {
   priority: string
   read_at: string | null
   created_at: string
+}
+
+// ─── Privacy: data export + account deletion (plan §82) ───
+
+// AccountExport is the privacy download: one JSON document per
+// person, self-describing (`format`) so a future reader can tell which
+// shape they are holding. Money stays in integer minor units like
+// everywhere else; secrets never appear (see notes.secret_material).
+export interface AccountExport {
+  format: string
+  exported_at: string
+  user: User
+  oauth_accounts: { id: string; provider: string; provider_id: string; email?: string; created_at: string }[]
+  api_keys: CustomerAPIKey[]
+  customer_webhooks: PortalWebhook[]
+  seats: Seat[]
+  // The account's own license keys ride along explicitly — the portal
+  // already shows them to their owner.
+  licenses: (License & { license_key: string })[]
+  orders: Order[]
+  invoices: Invoice[]
+  subscriptions: Subscription[]
+  notifications: NotificationItem[]
+  affiliate: Affiliate | null
+  referral_codes: ReferralCode[]
+  affiliate_conversions: AffiliateConversion[]
+  notes: { secret_material: string; deletion: string }
+}
+
+// AccountAnonymizeResult is the receipt of a deletion / anonymization:
+// what was revoked (counts) and what was preserved and why. The JWT
+// already issued stays valid for at most 24 hours; everything the
+// server can recall is revoked immediately.
+export interface AccountAnonymizeResult {
+  status: string // "deleted" (self-service) | "anonymized" (admin)
+  user_id: string
+  anonymized_email: string
+  role_demoted: boolean
+  revoked: {
+    refresh_tokens: number
+    api_keys: number
+    oauth_accounts: number
+    otp_codes: number
+    notifications: number
+    customer_webhooks: number
+    role_assignments: number
+    scim_identities: number
+  }
+  // Kept for legal, tax and accounting reasons — deletion erases the
+  // identity, not the ledger.
+  retained: string[]
+  note: string
 }
 
 // ─── RBAC (plan §8) ───

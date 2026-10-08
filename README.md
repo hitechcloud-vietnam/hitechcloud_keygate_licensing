@@ -124,6 +124,26 @@ Open **http://localhost:9000** — the setup wizard guides you from there.
 
 <br />
 
+## Documentation
+
+Project documentation lives in [`docs/`](docs):
+
+- [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module layout, request flow, surface routing, config-in-DB
+- [`LICENSE-COMPLIANCE.md`](docs/LICENSE-COMPLIANCE.md) — AGPL v3 §7(b) attribution obligations
+- [`API.md`](docs/API.md) — endpoint map, auth models, error envelope, idempotency
+- [`LICENSE-ENGINE.md`](docs/LICENSE-ENGINE.md) — license lifecycle, seats, floating, key format
+- [`ENTITLEMENTS.md`](docs/ENTITLEMENTS.md) — entitlement checks, quotas, feature flags
+- [`COMMERCE.md`](docs/COMMERCE.md) — orders, invoices, coupons, taxes, refunds, metrics
+- [`SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md) — Stripe lifecycle, proration, renewals
+- [`MARKETPLACE.md`](docs/MARKETPLACE.md) — catalog, reviews, release feeds
+- [`RESELLER.md`](docs/RESELLER.md) — resellers, affiliates, commissions
+- [`SECURITY.md`](docs/SECURITY.md) — threat model, auth, secrets, retention
+- [`DATABASE.md`](docs/DATABASE.md) — schema families, money rule, migrations
+- [`MULTI-TENANCY.md`](docs/MULTI-TENANCY.md) — single-tenant status + multi-org design (not implemented)
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — dev setup, test discipline, conventions
+
+<br />
+
 ## Compared to Alternatives
 
 | | **HiTechCloud** | Keygen | Cryptlex | LicenseSpring |

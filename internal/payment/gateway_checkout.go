@@ -457,6 +457,20 @@ func gatewayFirstNonEmpty(vals ...string) string {
 	return ""
 }
 
+// gatewayOrderProductID is the product an order's lifecycle events fan
+// out to: the product of its first line item that names one — the same
+// rule the handler-side order events follow (handler.orderProductID;
+// the packages cannot share it without an import cycle). An order with
+// no product line has nowhere to send them.
+func gatewayOrderProductID(o *model.Order) string {
+	for _, it := range o.Items {
+		if it.ProductID != "" {
+			return it.ProductID
+		}
+	}
+	return ""
+}
+
 // gatewayFindPayment locates the payment row an authenticated event is
 // about: first by the gateway's own handle, then — all three VN
 // gateways echo OUR order number — by (provider, order_key). The last
@@ -556,6 +570,25 @@ func GatewayFulfil(ctx context.Context, s *store.Store, deps *GatewayFulfilDeps,
 				}
 				slog.Info("gateway payment closed without settlement",
 					"provider", ev.Provider, "ref", row.ProviderRef, "status", ev.Status)
+				// order.failed (plan §35): the sale died on the wire —
+				// failed, cancelled or expired before settlement. The row
+				// just left pending, so this fires once per payment. A
+				// refund notice above sends nothing: the money went BACK,
+				// which is a different event and the admin refund path's
+				// to send. Best-effort: the payment row is already closed.
+				if ev.Status != StatusRefunded && deps != nil && deps.Webhooks != nil {
+					payload := map[string]any{
+						"order_id": row.OrderID, "payment_provider": row.Provider,
+						"provider_ref": row.ProviderRef, "reason": string(ev.Status),
+						"amount_minor": row.AmountMinor, "currency": row.Currency,
+					}
+					if o, oerr := s.FindOrderByID(ctx, row.OrderID); oerr == nil && o != nil {
+						payload["order_number"] = o.OrderNumber
+						if pid := gatewayOrderProductID(o); pid != "" {
+							deps.Webhooks.Dispatch(ctx, pid, model.EventOrderFailed, payload)
+						}
+					}
+				}
 			}
 		}
 		return nil
@@ -816,6 +849,17 @@ func gatewayFulfilOrder(ctx context.Context, s *store.Store, deps *GatewayFulfil
 	if ierr := s.CreateInvoice(ctx, inv); ierr != nil {
 		slog.Error("gateway fulfil: failed to record invoice",
 			"order", order.OrderNumber, "error", ierr)
+	} else if deps != nil && deps.Webhooks != nil {
+		// invoice.paid (plan §35), the gateway twin of recordOrder's
+		// dispatch: the money settled and the invoice is paid. Only
+		// when the invoice row actually landed — above it is merely
+		// logged — and best-effort: a receiver being down never re-runs
+		// the sale.
+		deps.Webhooks.Dispatch(ctx, plan.ProductID, model.EventInvoicePaid, map[string]any{
+			"invoice_id": inv.ID, "order_id": order.ID, "order_number": order.OrderNumber,
+			"invoice_number": inv.InvoiceNumber, "amount_minor": inv.TotalMinor,
+			"currency": inv.Currency, "payment_provider": row.Provider,
+		})
 	}
 
 	slog.Info("gateway payment fulfilled",

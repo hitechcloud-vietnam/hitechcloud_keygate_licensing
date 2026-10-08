@@ -65,7 +65,7 @@ type secNotifStore struct {
 	attempts []string          // "<id> as <userID>" for every MarkRead call
 }
 
-func (f *secNotifStore) ListUserNotifications(_ context.Context, userID string, _ bool, _ store.Page) ([]*model.UserNotification, int, error) {
+func (f *secNotifStore) ListUserNotifications(_ context.Context, userID string, _ bool, _ store.Page, _ store.Sort) ([]*model.UserNotification, int, error) {
 	var out []*model.UserNotification
 	for id, uid := range f.owner {
 		if uid == userID {

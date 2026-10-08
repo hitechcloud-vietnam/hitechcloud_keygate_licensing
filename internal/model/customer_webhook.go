@@ -149,6 +149,15 @@ var CustomerWebhookEvents = []string{
 	EventReleasePublished,
 	EventReleaseYanked,
 	EventReleaseUnyanked,
+	EventProductCreated,
+	EventProductUpdated,
+	EventProductDeleted,
+	EventOrderFailed,
+	EventOrderRefunded,
+	EventInvoicePaid,
+	EventInvoiceVoided,
+	EventSubscriptionRenewed,
+	EventUsageThresholdReached,
 }
 
 // IsCustomerWebhookEvent reports whether name is in the subscription

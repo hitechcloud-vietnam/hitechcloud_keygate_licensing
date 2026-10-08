@@ -27,6 +27,7 @@ type fakeOrderAdminStore struct {
 	billingWise int
 	lastBilling *model.Order
 	audits      []*model.AuditLog
+	lastSort    store.Sort
 }
 
 func newFakeOrderAdminStore() *fakeOrderAdminStore {
@@ -36,7 +37,8 @@ func newFakeOrderAdminStore() *fakeOrderAdminStore {
 	}
 }
 
-func (f *fakeOrderAdminStore) ListOrders(_ context.Context, _, _ string, _ store.Page) ([]*model.Order, int, error) {
+func (f *fakeOrderAdminStore) ListOrders(_ context.Context, _, _ string, _ store.Page, sort store.Sort) ([]*model.Order, int, error) {
+	f.lastSort = sort
 	var out []*model.Order
 	for _, o := range f.orders {
 		out = append(out, o)
@@ -91,7 +93,8 @@ func (f *fakeOrderAdminStore) UpdateOrderBilling(_ context.Context, id string, o
 	return nil
 }
 
-func (f *fakeOrderAdminStore) ListInvoicesByOrder(_ context.Context, orderID string) ([]*model.Invoice, error) {
+func (f *fakeOrderAdminStore) ListInvoicesByOrder(_ context.Context, orderID string, sort store.Sort) ([]*model.Invoice, error) {
+	f.lastSort = sort
 	var out []*model.Invoice
 	for _, inv := range f.invoices {
 		if inv.OrderID == orderID {

@@ -40,27 +40,32 @@ func (s *Store) CreateUserNotification(ctx context.Context, n *model.UserNotific
 }
 
 // userNotificationsListQuery builds the inbox listing: this user's
-// rows, newest first (created_at DESC with id DESC as the stable
-// tiebreaker so OFFSET/LIMIT pages cannot repeat or skip a row), and
-// optionally only the unread ones. Split out as a builder so its shape
-// can be pinned without a database (notifications_center_test.go).
-func userNotificationsListQuery(db *bun.DB, userID string, unreadOnly bool, dest *[]*model.UserNotification) *bun.SelectQuery {
+// rows (created_at DESC with id DESC as the stable tiebreaker so
+// OFFSET/LIMIT pages cannot repeat or skip a row — applySort's
+// default), and optionally only the unread ones. Split out as a
+// builder so its shape can be pinned without a database
+// (notifications_center_test.go). An empty sort keeps the default,
+// newest first.
+func userNotificationsListQuery(db *bun.DB, userID string, unreadOnly bool, sort Sort, dest *[]*model.UserNotification) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: `"user_notification".created_at`, Desc: true}
+	}
 	q := db.NewSelect().Model(dest).
-		Where(`"user_notification".user_id = ?`, userID).
-		OrderExpr(`"user_notification".created_at DESC, "user_notification".id DESC`)
+		Where(`"user_notification".user_id = ?`, userID)
 	if unreadOnly {
 		q = q.Where(`"user_notification".read_at IS NULL`)
 	}
-	return q
+	return applySort(q, sort, `"user_notification".id`)
 }
 
 // ListUserNotifications answers the inbox listing: one page of the
-// user's rows (newest first) plus how many rows the filter matched in
-// total. Ownership is in the WHERE clause — the query cannot see
-// anyone else's rows even if the caller asked.
-func (s *Store) ListUserNotifications(ctx context.Context, userID string, unreadOnly bool, p Page) ([]*model.UserNotification, int, error) {
+// user's rows (newest first, or the validated order the caller asked
+// for) plus how many rows the filter matched in total. Ownership is
+// in the WHERE clause — the query cannot see anyone else's rows even
+// if the caller asked.
+func (s *Store) ListUserNotifications(ctx context.Context, userID string, unreadOnly bool, p Page, sort Sort) ([]*model.UserNotification, int, error) {
 	var out []*model.UserNotification
-	q := userNotificationsListQuery(s.DB, userID, unreadOnly, &out)
+	q := userNotificationsListQuery(s.DB, userID, unreadOnly, sort, &out)
 	total, err := scanPage(ctx, q, p)
 	if err != nil {
 		return nil, 0, err

@@ -94,15 +94,16 @@ func (s *Store) FindOrderByIdempotencyKey(ctx context.Context, key string) (*mod
 	return o, s.DB.NewSelect().Model(o).Where("idempotency_key = ?", key).Scan(ctx)
 }
 
-// ListOrders returns one page of orders and how many the filter
-// matched. The search covers what an admin actually types: a customer
-// email or an order number.
-func (s *Store) ListOrders(ctx context.Context, search, status string, p Page) ([]*model.Order, int, error) {
-	var out []*model.Order
-	// Bun aliases the model by the snake_case of the STRUCT name
-	// (FROM "orders" AS "order"), so qualifiers must use "order".
-	q := s.DB.NewSelect().Model(&out).
-		OrderExpr(`"order".created_at DESC, "order".id DESC`)
+// ordersListQuery builds the admin order ledger listing. Bun aliases
+// the model by the snake_case of the STRUCT name (FROM "orders" AS
+// "order"), so qualifiers must use "order" — quoted, it is a
+// reserved word. The sort is the handler's validated ordering; an
+// empty one takes the ledger's own default, newest first.
+func ordersListQuery(db bun.IDB, search, status string, sort Sort, dest *[]*model.Order) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: `"order".created_at`, Desc: true}
+	}
+	q := db.NewSelect().Model(dest)
 	if status != "" {
 		q = q.Where(`"order".status = ?`, status)
 	}
@@ -110,6 +111,16 @@ func (s *Store) ListOrders(ctx context.Context, search, status string, p Page) (
 		q = q.Where(`"order".customer_email ILIKE ? OR "order".order_number ILIKE ?`,
 			"%"+search+"%", "%"+search+"%")
 	}
+	return applySort(q, sort, `"order".id`)
+}
+
+// ListOrders returns one page of orders and how many the filter
+// matched. The search covers what an admin actually types: a customer
+// email or an order number. sort is the validated ordering the caller
+// asked for; the zero value takes the default, newest first.
+func (s *Store) ListOrders(ctx context.Context, search, status string, p Page, sort Sort) ([]*model.Order, int, error) {
+	var out []*model.Order
+	q := ordersListQuery(s.DB, search, status, sort, &out)
 	total, err := scanPage(ctx, q, p)
 	if err != nil {
 		return nil, 0, err
@@ -158,15 +169,26 @@ func (s *Store) FindInvoiceByID(ctx context.Context, id string) (*model.Invoice,
 	return inv, s.DB.NewSelect().Model(inv).Where("id = ?", id).Scan(ctx)
 }
 
+// invoicesByOrderQuery builds the per-order invoice listing. An
+// empty sort keeps the order the ledger has always read in — oldest
+// first, the order the documents were drawn in.
+func invoicesByOrderQuery(db bun.IDB, orderID string, sort Sort, dest *[]*model.Invoice) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: "invoice.created_at"}
+	}
+	q := db.NewSelect().Model(dest).Where("order_id = ?", orderID)
+	return applySort(q, sort, "invoice.id")
+}
+
 // ListInvoicesByOrder returns every invoice drawn against an order,
-// oldest first.
-func (s *Store) ListInvoicesByOrder(ctx context.Context, orderID string) ([]*model.Invoice, error) {
+// oldest first by default (or in the validated order the caller asked
+// for).
+func (s *Store) ListInvoicesByOrder(ctx context.Context, orderID string, sort Sort) ([]*model.Invoice, error) {
 	var out []*model.Invoice
-	err := s.DB.NewSelect().Model(&out).
-		Where("order_id = ?", orderID).
-		OrderExpr("created_at ASC, id ASC").
-		Scan(ctx)
-	return out, err
+	if err := invoicesByOrderQuery(s.DB, orderID, sort, &out).Scan(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // InvoiceByOrder returns the order's invoice with a uniqueness guard:

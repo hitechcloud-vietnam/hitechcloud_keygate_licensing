@@ -13,6 +13,9 @@ import {
   DataTableHeader,
   DataTablePagination,
   DataTableRow,
+  DataTableSortHead,
+  useServerPagination,
+  useServerSort,
 } from "@/components/ui/data-table"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -25,24 +28,34 @@ export default function AuditPage() {
   const [entityFilter, setEntityFilter] = useState("")
   const [entityIdFilter, setEntityIdFilter] = useState("")
   const [productFilter, setProductFilter] = useState("")
-  const [page, setPage] = useState(0)
-  const limit = 30
+  // Server-side column sorting (plan §70); the sort state joins the
+  // filters so a re-sort lands on the first page of the new order.
+  const srt = useServerSort("created_at", "desc")
+  const pg = useServerPagination(30, [entityFilter, entityIdFilter, productFilter, srt.sort, srt.order])
 
   const { data, isLoading } = useQuery({
-    queryKey: ["admin", "audit", entityFilter, entityIdFilter, productFilter, page],
+    queryKey: [
+      "admin",
+      "audit",
+      entityFilter,
+      entityIdFilter,
+      productFilter,
+      srt.sort,
+      srt.order,
+      pg.page,
+      pg.pageSize,
+    ],
     queryFn: () =>
       admin.listAuditLogs({
         entity: entityFilter || undefined,
         entity_id: entityIdFilter || undefined,
         product_id: productFilter || undefined,
-        offset: page * limit,
-        limit,
+        ...srt.params,
+        ...pg.params,
       }),
   })
 
-  const logs = data?.audit_logs || []
-  const total = data?.total || 0
-  const totalPages = Math.ceil(total / limit)
+  const { items: logs, total, totalPages } = pg.from(data, data?.audit_logs)
 
   const actionColor = (action: string) => {
     if (action === "created") return "bg-emerald-100 text-emerald-800"
@@ -59,13 +72,7 @@ export default function AuditPage() {
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Select
-          value={entityFilter || "all"}
-          onValueChange={(v) => {
-            setEntityFilter(v === "all" ? "" : v)
-            setPage(0)
-          }}
-        >
+        <Select value={entityFilter || "all"} onValueChange={(v) => setEntityFilter(v === "all" ? "" : v)}>
           <SelectTrigger className="w-full sm:w-48" aria-label={t("audit.filterEntity")}>
             <SelectValue placeholder={t("audit.filterEntity")} />
           </SelectTrigger>
@@ -85,10 +92,7 @@ export default function AuditPage() {
           placeholder={t("audit.filterEntityId")}
           aria-label={t("audit.filterEntityId")}
           value={entityIdFilter}
-          onChange={(e) => {
-            setEntityIdFilter(e.target.value)
-            setPage(0)
-          }}
+          onChange={(e) => setEntityIdFilter(e.target.value)}
           className="w-full sm:w-64"
         />
         {/* Searched on the server: an install past the first page of
@@ -96,10 +100,7 @@ export default function AuditPage() {
             of them. The type still shows beside each name. */}
         <ProductSelect
           value={productFilter}
-          onChange={(v) => {
-            setProductFilter(v)
-            setPage(0)
-          }}
+          onChange={setProductFilter}
           allLabel={t("audit.allProducts")}
           placeholder={t("audit.filterProduct")}
           className="w-full sm:w-64"
@@ -127,10 +128,18 @@ export default function AuditPage() {
               <DataTable>
                 <DataTableHeader>
                   <DataTableRow>
-                    <DataTableHead>{t("common.created")}</DataTableHead>
-                    <DataTableHead>{t("audit.entity")}</DataTableHead>
-                    <DataTableHead>{t("audit.action")}</DataTableHead>
-                    <DataTableHead>{t("audit.actor")}</DataTableHead>
+                    <DataTableSortHead sort={srt} column="created_at" firstOrder="desc">
+                      {t("common.created")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="entity" firstOrder="asc">
+                      {t("audit.entity")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="action" firstOrder="asc">
+                      {t("audit.action")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="actor" firstOrder="asc">
+                      {t("audit.actor")}
+                    </DataTableSortHead>
                     <DataTableHead>{t("audit.changes")}</DataTableHead>
                   </DataTableRow>
                 </DataTableHeader>
@@ -163,11 +172,11 @@ export default function AuditPage() {
               </DataTable>
               {total > 0 && (
                 <DataTablePagination
-                  page={page}
+                  page={pg.page}
                   totalPages={totalPages}
                   total={total}
-                  pageSize={limit}
-                  onPageChange={setPage}
+                  pageSize={pg.pageSize}
+                  onPageChange={pg.setPage}
                 />
               )}
             </>

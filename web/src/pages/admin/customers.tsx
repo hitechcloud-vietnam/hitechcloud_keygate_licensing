@@ -1,7 +1,17 @@
-import { useQuery } from "@tanstack/react-query"
-import { Eye, Search } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Download, Eye, Search, UserX } from "lucide-react"
 import { useState } from "react"
 import { ExportCsvButton } from "@/components/export-csv"
+import { showToast, toastError } from "@/components/toast"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -14,32 +24,85 @@ import {
   DataTableHeader,
   DataTablePagination,
   DataTableRow,
+  DataTableSortHead,
+  useServerPagination,
+  useServerSort,
 } from "@/components/ui/data-table"
-import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { type TranslationKeys, useI18n } from "@/i18n"
-import type { UserDetail } from "@/lib/api"
+import type { AccountAnonymizeResult, User, UserDetail } from "@/lib/api"
 import { admin } from "@/lib/api"
 import { formatDate, statusColor } from "@/lib/utils"
 
+// downloadJSON hands an export to the browser as a file — the same
+// shape as the portal privacy page (see pages/portal/account-privacy):
+// a transient object URL, a synthetic anchor click, then release.
+function downloadJSON(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename.endsWith(".json") ? filename : `${filename}.json`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export default function CustomersPage() {
   const { t } = useI18n()
-  const [page, setPage] = useState(0)
+  const qc = useQueryClient()
   // ?search= pre-fills the box: global search (and the command
   // palette) deep-link to this list narrowed to the hit they found.
   const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("search") || "")
-  const limit = 30
+  // Server-side column sorting (plan §70); the sort state joins the
+  // filters so a re-sort lands on the first page of the new order.
+  const srt = useServerSort("created_at", "desc")
+  const pg = useServerPagination(30, [search, srt.sort, srt.order])
   const [viewingUser, setViewingUser] = useState<string | null>(null)
+  // Privacy actions (plan §82), for any user: export downloads the
+  // same JSON document the user can pull from their own privacy page;
+  // anonymize is the danger action, behind a confirmation.
+  const [anonymizing, setAnonymizing] = useState<User | null>(null)
+  const [anonymizeResult, setAnonymizeResult] = useState<AccountAnonymizeResult | null>(null)
 
   const { data, isLoading } = useQuery({
-    queryKey: ["admin", "users", search, page],
-    queryFn: () => admin.listUsers({ search: search || undefined, offset: page * limit, limit }),
+    queryKey: ["admin", "users", search, srt.sort, srt.order, pg.page, pg.pageSize],
+    queryFn: () => admin.listUsers({ search: search || undefined, ...srt.params, ...pg.params }),
   })
 
-  const customers = data?.users || []
-  const total = data?.total || 0
-  const totalPages = Math.ceil(total / limit)
+  const { items: customers, total, totalPages } = pg.from(data, data?.users)
+
+  const exportMut = useMutation({
+    mutationFn: (id: string) => admin.exportUser(id),
+    onSuccess: (data) => {
+      downloadJSON(`user-export-${new Date().toISOString().slice(0, 10)}`, data)
+      showToast(t("customers.exportDone"), "success")
+    },
+    onError: (e: Error) => toastError(e),
+  })
+
+  const anonymizeMut = useMutation({
+    mutationFn: (id: string) => admin.anonymizeUser(id),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["admin", "users"] })
+      qc.invalidateQueries({ queryKey: ["admin", "user-detail"] })
+      setAnonymizing(null)
+      setAnonymizeResult(result)
+      showToast(t("customers.anonymizeDone"), "success")
+    },
+    onError: (e: Error) => toastError(e),
+  })
 
   return (
     <div className="space-y-6">
@@ -55,10 +118,7 @@ export default function CustomersPage() {
             placeholder={t("common.search")}
             aria-label={t("common.search")}
             value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              setPage(0)
-            }}
+            onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
           />
         </div>
@@ -78,11 +138,17 @@ export default function CustomersPage() {
               <DataTable>
                 <DataTableHeader>
                   <DataTableRow>
-                    <DataTableHead>{t("customers.customer")}</DataTableHead>
-                    <DataTableHead>{t("common.email")}</DataTableHead>
-                    <DataTableHead>{t("customers.joined")}</DataTableHead>
+                    <DataTableSortHead sort={srt} column="name" firstOrder="asc">
+                      {t("customers.customer")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="email" firstOrder="asc">
+                      {t("common.email")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="created_at" firstOrder="desc">
+                      {t("customers.joined")}
+                    </DataTableSortHead>
                     <DataTableHead>{t("customers.lastUpdated")}</DataTableHead>
-                    <DataTableHead className="w-16">{t("common.actions")}</DataTableHead>
+                    <DataTableHead className="w-28">{t("common.actions")}</DataTableHead>
                   </DataTableRow>
                 </DataTableHeader>
                 <DataTableBody>
@@ -109,16 +175,43 @@ export default function CustomersPage() {
                         {formatDate(u.updated_at)}
                       </DataTableCell>
                       <DataTableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          title={t("customers.detail")}
-                          aria-label={t("customers.detail")}
-                          onClick={() => setViewingUser(u.id)}
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            title={t("customers.detail")}
+                            aria-label={t("customers.detail")}
+                            onClick={() => setViewingUser(u.id)}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          {/* Export downloads the same document the
+                              user can pull from their own privacy
+                              page — the action is audited server-side
+                              either way. */}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            title={t("customers.exportAction")}
+                            aria-label={t("customers.exportAction")}
+                            disabled={exportMut.isPending}
+                            onClick={() => exportMut.mutate(u.id)}
+                          >
+                            <Download className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            title={t("customers.anonymizeAction")}
+                            aria-label={t("customers.anonymizeAction")}
+                            onClick={() => setAnonymizing(u)}
+                          >
+                            <UserX className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
                       </DataTableCell>
                     </DataTableRow>
                   ))}
@@ -126,11 +219,11 @@ export default function CustomersPage() {
               </DataTable>
               {total > 0 && (
                 <DataTablePagination
-                  page={page}
+                  page={pg.page}
                   totalPages={totalPages}
                   total={total}
-                  pageSize={limit}
-                  onPageChange={setPage}
+                  pageSize={pg.pageSize}
+                  onPageChange={pg.setPage}
                 />
               )}
             </>
@@ -145,6 +238,59 @@ export default function CustomersPage() {
           if (!open) setViewingUser(null)
         }}
       />
+
+      {/* Anonymize is the danger action: the confirmation spells out
+          what is erased and — like the portal privacy page — what is
+          preserved, before anything irreversible happens. */}
+      <AlertDialog open={!!anonymizing} onOpenChange={(open) => !open && setAnonymizing(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("customers.anonymizeTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {anonymizing ? `${anonymizing.email} — ` : ""}
+              {t("customers.anonymizeDesc")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={anonymizeMut.isPending}
+              onClick={() => anonymizing && anonymizeMut.mutate(anonymizing.id)}
+            >
+              {t("customers.anonymizeConfirm")}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* The receipt: the new anonymized identity and the records
+          that were kept, worth reading before the row moves on. */}
+      <Dialog open={!!anonymizeResult} onOpenChange={(open) => !open && setAnonymizeResult(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("customers.anonymizeResultTitle")}</DialogTitle>
+            <DialogDescription>{anonymizeResult?.note}</DialogDescription>
+          </DialogHeader>
+          {anonymizeResult && (
+            <DialogBody className="space-y-3 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">{t("customers.anonymizeResultEmail")}</p>
+                <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{anonymizeResult.anonymized_email}</code>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">{t("customers.anonymizeResultRetained")}</p>
+                <p>{anonymizeResult.retained.join(", ")}</p>
+              </div>
+            </DialogBody>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAnonymizeResult(null)}>
+              {t("common.close")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

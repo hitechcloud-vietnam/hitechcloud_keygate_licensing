@@ -137,6 +137,15 @@ func (s *UsageService) RecordUsage(ctx context.Context, in RecordUsageInput) (*R
 			}); err != nil {
 				s.logger.Error("webhook dispatch failed", "event", model.EventQuotaWarning, "error", err)
 			}
+			// usage.threshold_reached (plan §35) — the same crossing
+			// under its own vocabulary, for subscribers watching the
+			// metre rather than the quota warning. Same
+			// once-per-crossing guard, same facts.
+			if err := s.webhook.DispatchWithLog(ctx, lic.ProductID, model.EventUsageThresholdReached, map[string]any{
+				"license_id": lic.ID, "feature": in.Feature, "used": newUsed, "limit": limit, "threshold": s.warningThreshold,
+			}); err != nil {
+				s.logger.Error("webhook dispatch failed", "event", model.EventUsageThresholdReached, "error", err)
+			}
 			if s.email != nil && lic.Email != "" {
 				productName := ""
 				if lic.Product != nil {

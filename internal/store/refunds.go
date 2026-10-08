@@ -38,14 +38,18 @@ var (
 	ErrInvalidRevokeReason = errors.New("invalid revocation reason")
 )
 
-// refundSelectByOrder builds the per-order refund list, newest first
-// (created_at then id — the same total order every admin list uses).
-// Extracted as a builder so the alias and the order are pinnable
-// without a database (refunds_test.go).
-func refundSelectByOrder(db bun.IDB, orderID string) *bun.SelectQuery {
-	return db.NewSelect().Model((*model.Refund)(nil)).
-		Where("refund.order_id = ?", orderID).
-		OrderExpr("refund.created_at DESC, refund.id DESC")
+// refundSelectByOrder builds the per-order refund list. Extracted as
+// a builder so the alias and the order are pinnable without a
+// database (refunds_test.go). An empty sort keeps the list's own
+// order, newest first (created_at then id — the same total order
+// every admin list uses).
+func refundSelectByOrder(db bun.IDB, orderID string, sort Sort) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: "refund.created_at", Desc: true}
+	}
+	q := db.NewSelect().Model((*model.Refund)(nil)).
+		Where("refund.order_id = ?", orderID)
+	return applySort(q, sort, "refund.id")
 }
 
 // CreateRefund writes one refund row. The row's status comes from the
@@ -71,12 +75,12 @@ func (s *Store) FindRefundByID(ctx context.Context, id int64) (*model.Refund, er
 }
 
 // ListRefundsByOrder returns every refund recorded against an order,
-// newest first. The list is the audit trail of the money that went
-// back and is never filtered — pending and failed rows are history
-// too.
-func (s *Store) ListRefundsByOrder(ctx context.Context, orderID string) ([]*model.Refund, error) {
+// newest first (or in the validated order the caller asked for). The
+// list is the audit trail of the money that went back and is never
+// filtered — pending and failed rows are history too.
+func (s *Store) ListRefundsByOrder(ctx context.Context, orderID string, sort Sort) ([]*model.Refund, error) {
 	var rows []*model.Refund
-	if err := refundSelectByOrder(s.DB, orderID).Scan(ctx, &rows); err != nil {
+	if err := refundSelectByOrder(s.DB, orderID, sort).Scan(ctx, &rows); err != nil {
 		return nil, err
 	}
 	return rows, nil

@@ -515,6 +515,9 @@ func main() {
 	taxAdminH := handler.NewTaxAdminHandler(db)
 	orderSvc := service.NewOrderService(db, couponLookup{s: db})
 	orderAdminH := handler.NewOrderAdminHandler(orderSvc, db)
+	// Emissions for order.refunded / invoice.voided (plan §35) are
+	// best-effort fan-outs — without this setter they silently don't fire.
+	orderAdminH.SetWebhook(webhookSvc)
 	// Checkout pricing preview (public) and the customer-facing
 	// commerce surfaces (Phase 5): orders, invoices, downloads, keys.
 	checkoutQuoteH := handler.NewCheckoutQuoteHandler(orderSvc, db)
@@ -1394,6 +1397,13 @@ func main() {
 		portal.GET("/notifications/unread-count", notificationCenterH.UnreadCount)
 		portal.POST("/notifications/:id/read", notificationCenterH.MarkRead)
 		portal.POST("/notifications/read-all", notificationCenterH.MarkAllRead)
+
+		// Privacy self-service (plan §82): data export (JSON download) +
+		// account deletion (anonymize in place; financial records kept
+		// for legal/accounting reasons — see handler docs).
+		privacyH := handler.NewPrivacyHandler(db)
+		portal.GET("/export", privacyH.Export)
+		portal.POST("/delete-account", privacyH.DeleteAccount)
 	}
 
 	// Admin route layout: three groups under /admin, all sharing the
@@ -1458,8 +1468,13 @@ func main() {
 		admin.GET("/search", adminSearch.Search)
 
 		// Refunds (plan §79): full + partial + manual, idempotent.
+		// POST /orders/:id/refunds creates a refund row (the ledger);
+		// the legacy full-order refund stays at POST /orders/:id/refund
+		// (orderAdminH.Refund) — two distinct handlers, two distinct
+		// paths, gin cannot register a path twice.
 		refundsAdmin := handler.NewRefundsAdminHandler(db)
-		admin.POST("/orders/:id/refund", middleware.RequirePermission(model.PermOrdersRefund, db), refundsAdmin.Refund)
+		refundsAdmin.SetWebhook(webhookSvc)
+		admin.POST("/orders/:id/refunds", middleware.RequirePermission(model.PermOrdersRefund, db), refundsAdmin.Refund)
 		admin.GET("/orders/:id/refunds", middleware.RequirePermission(model.PermOrdersRefund, db), refundsAdmin.ListRefunds)
 
 		// MRR/ARR metrics (plan §42).
@@ -1471,6 +1486,13 @@ func main() {
 		// hourly job wired above.
 		retentionAdmin := handler.NewRetentionAdminHandler(db)
 		admin.POST("/retention/run", middleware.RequirePermission(model.PermSettingsManage, db), retentionAdmin.Run)
+
+		// Privacy (plan §82): admin-initiated export/anonymize of a
+		// customer account. Anonymization preserves financial rows
+		// (orders, invoices, refunds, commissions, licenses, audit).
+		privacyH := handler.NewPrivacyHandler(db)
+		admin.GET("/users/:id/export", middleware.RequirePermission(model.PermCustomersManage, db), privacyH.AdminExport)
+		admin.POST("/users/:id/anonymize", middleware.RequirePermission(model.PermCustomersManage, db), privacyH.AdminAnonymize)
 
 		// Per-route permission gates (plan §8 rollout): each route names
 		// the granular permission that authorizes it. Admission is still

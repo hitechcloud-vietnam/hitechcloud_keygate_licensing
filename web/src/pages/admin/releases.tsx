@@ -37,6 +37,9 @@ import {
   DataTableHeader,
   DataTablePagination,
   DataTableRow,
+  DataTableSortHead,
+  useServerPagination,
+  useServerSort,
 } from "@/components/ui/data-table"
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
@@ -69,7 +72,9 @@ export default function ReleasesPage() {
   const [productFilter, setProductFilter] = useState("")
   const [channelFilter, setChannelFilter] = useState("")
   const [statusFilter, setStatusFilter] = useState("")
-  const [page, setPage] = useState(0)
+  // Server-side column sorting (plan §70); the sort state joins the
+  // filters so a re-sort lands on the first page of the new order.
+  const srt = useServerSort("created_at", "desc")
   const [creating, setCreating] = useState(false)
   const [yanking, setYanking] = useState<Release | null>(null)
   const [unyanking, setUnyanking] = useState<Release | null>(null)
@@ -107,20 +112,29 @@ export default function ReleasesPage() {
   const releasableCount = releasableData?.total ?? 0
   const anyProductCount = anyProductsData?.total ?? 0
 
+  const pg = useServerPagination(PAGE_SIZE, [productFilter, channelFilter, statusFilter, srt.sort, srt.order])
   const { data, isLoading } = useQuery({
-    queryKey: ["admin", "releases", productFilter, channelFilter, statusFilter, page],
+    queryKey: [
+      "admin",
+      "releases",
+      productFilter,
+      channelFilter,
+      statusFilter,
+      srt.sort,
+      srt.order,
+      pg.page,
+      pg.pageSize,
+    ],
     queryFn: () =>
       admin.listReleases({
         product_id: productFilter || undefined,
         channel: channelFilter || undefined,
         status: statusFilter || undefined,
-        limit: PAGE_SIZE,
-        offset: page * PAGE_SIZE,
+        ...srt.params,
+        ...pg.params,
       }),
   })
-  const releases = data?.releases || []
-  const total = data?.total || 0
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const { items: releases, total, totalPages } = pg.from(data, data?.releases)
   const latestByBucket = computeLatestVersions(releases)
 
   const publishMut = useMutation({
@@ -259,11 +273,19 @@ export default function ReleasesPage() {
         <DataTableHeader>
           <DataTableRow>
             <DataTableHead>{t("common.product")}</DataTableHead>
-            <DataTableHead>{t("releases.version")}</DataTableHead>
-            <DataTableHead>{t("releases.channel")}</DataTableHead>
+            <DataTableSortHead sort={srt} column="version" firstOrder="asc">
+              {t("releases.version")}
+            </DataTableSortHead>
+            <DataTableSortHead sort={srt} column="channel" firstOrder="asc">
+              {t("releases.channel")}
+            </DataTableSortHead>
             <DataTableHead>{t("releases.platforms")}</DataTableHead>
-            <DataTableHead>{t("common.status")}</DataTableHead>
-            <DataTableHead>{t("common.created")}</DataTableHead>
+            <DataTableSortHead sort={srt} column="status" firstOrder="asc">
+              {t("common.status")}
+            </DataTableSortHead>
+            <DataTableSortHead sort={srt} column="created_at" firstOrder="desc">
+              {t("common.created")}
+            </DataTableSortHead>
             <DataTableHead className="text-right">{t("common.actions")}</DataTableHead>
           </DataTableRow>
         </DataTableHeader>
@@ -396,11 +418,11 @@ export default function ReleasesPage() {
       </DataTable>
 
       <DataTablePagination
-        page={page}
+        page={pg.page}
         totalPages={totalPages}
         total={total}
-        pageSize={PAGE_SIZE}
-        onPageChange={setPage}
+        pageSize={pg.pageSize}
+        onPageChange={pg.setPage}
       />
 
       {creating && (

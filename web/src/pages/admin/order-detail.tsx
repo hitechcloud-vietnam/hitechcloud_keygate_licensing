@@ -3,6 +3,7 @@ import { ArrowLeft, Ban, RotateCcw, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
+import { SortBar } from "@/components/sort-bar"
 import { showToast, toastError } from "@/components/toast"
 import {
   AlertDialog,
@@ -24,12 +25,14 @@ import {
   DataTableHead,
   DataTableHeader,
   DataTableRow,
+  DataTableSortHead,
+  useServerSort,
 } from "@/components/ui/data-table"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { type TranslationKeys, useI18n } from "@/i18n"
-import type { Order, OrderBillingPatch, OrderInvoice } from "@/lib/api"
+import type { Order, OrderBillingPatch, OrderInvoice, Refund } from "@/lib/api"
 import { ApiError, admin } from "@/lib/api"
 import { errorMessage } from "@/lib/errors"
 import { formatBps, formatMinor } from "@/lib/money"
@@ -51,10 +54,19 @@ export default function OrderDetailPage() {
   })
   // The order payload carries its invoices too, but the ledger has a
   // dedicated listing for them — that is the one this page shows, so
-  // what is on screen is what the endpoint says.
+  // what is on screen is what the endpoint says. Two ledgers, two
+  // sort states (plan §70): invoices read oldest-first by the
+  // server's default, refunds newest-first.
+  const invSort = useServerSort("created_at", "asc")
+  const refSort = useServerSort("created_at", "desc")
   const { data: invoicesData } = useQuery({
-    queryKey: ["admin", "orders", id, "invoices"],
-    queryFn: () => admin.listOrderInvoices(id),
+    queryKey: ["admin", "orders", id, "invoices", invSort.sort, invSort.order],
+    queryFn: () => admin.listOrderInvoices(id, { ...invSort.params }),
+    enabled: !!id,
+  })
+  const { data: refundsData } = useQuery({
+    queryKey: ["admin", "orders", id, "refunds", refSort.sort, refSort.order],
+    queryFn: () => admin.listOrderRefunds(id, { ...refSort.params }),
     enabled: !!id,
   })
 
@@ -131,6 +143,7 @@ export default function OrderDetailPage() {
   }
 
   const invoices = invoicesData?.invoices || []
+  const refunds = refundsData?.refunds || []
   const items = order.items || []
 
   return (
@@ -283,7 +296,20 @@ export default function OrderDetailPage() {
             <CardHeader>
               <CardTitle className="text-base">{t("orders.invoices")}</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              {/* The invoice cards are a list, not a table — their
+                  column headers live in this toolbar above them. */}
+              <SortBar
+                sort={invSort}
+                columns={[
+                  { column: "created_at", label: t("common.created"), firstOrder: "asc" },
+                  { column: "invoice_number", label: t("orders.invoiceNumber"), firstOrder: "asc" },
+                  { column: "status", label: t("common.status"), firstOrder: "asc" },
+                  { column: "total", label: t("orders.colTotal"), firstOrder: "desc" },
+                  { column: "paid_at", label: t("orders.paidAt"), firstOrder: "desc" },
+                  { column: "due_at", label: t("orders.dueAt"), firstOrder: "asc" },
+                ]}
+              />
               {invoices.length === 0 ? (
                 <p className="text-sm text-muted-foreground">{t("orders.invoicesEmpty")}</p>
               ) : (
@@ -348,6 +374,59 @@ export default function OrderDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* The refund ledger (plan §79): one row per refund issued
+              against this order, server-sorted like the other admin
+              lists. Money is integer minor units. */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">{t("orders.refunds")}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {refunds.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("orders.refundsEmpty")}</p>
+              ) : (
+                <DataTable>
+                  <DataTableHeader>
+                    <DataTableRow>
+                      <DataTableSortHead sort={refSort} column="created_at" firstOrder="desc">
+                        {t("common.created")}
+                      </DataTableSortHead>
+                      <DataTableSortHead sort={refSort} column="amount" firstOrder="desc">
+                        {t("orders.refundAmount")}
+                      </DataTableSortHead>
+                      <DataTableSortHead sort={refSort} column="status" firstOrder="asc">
+                        {t("common.status")}
+                      </DataTableSortHead>
+                      <DataTableSortHead sort={refSort} column="provider" firstOrder="asc">
+                        {t("orders.provider")}
+                      </DataTableSortHead>
+                      <DataTableHead>{t("orders.refundReason")}</DataTableHead>
+                    </DataTableRow>
+                  </DataTableHeader>
+                  <DataTableBody>
+                    {refunds.map((r: Refund) => (
+                      <DataTableRow key={r.id}>
+                        <DataTableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                          {formatDate(r.created_at)}
+                        </DataTableCell>
+                        <DataTableCell className="font-medium">{formatMinor(r.amount_minor, r.currency)}</DataTableCell>
+                        <DataTableCell>
+                          <Badge className={refundStatusColor(r.status)}>
+                            {t(`status.${r.status}` as TranslationKeys)}
+                          </Badge>
+                        </DataTableCell>
+                        <DataTableCell className="text-muted-foreground">{r.payment_provider}</DataTableCell>
+                        <DataTableCell className="text-xs text-muted-foreground max-w-[160px] truncate">
+                          {r.reason || "-"}
+                        </DataTableCell>
+                      </DataTableRow>
+                    ))}
+                  </DataTableBody>
+                </DataTable>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
 
@@ -406,6 +485,22 @@ export default function OrderDetailPage() {
       </AlertDialog>
     </div>
   )
+}
+
+// Refund statuses read differently on a badge, the same idea as the
+// order badges in pages/admin/orders: money on its way back out is
+// not money that failed to go.
+function refundStatusColor(status: string): string {
+  switch (status) {
+    case "succeeded":
+      return "bg-emerald-100 text-emerald-800"
+    case "pending":
+      return "bg-amber-100 text-amber-800"
+    case "failed":
+      return "bg-red-100 text-red-700"
+    default:
+      return "bg-gray-100 text-gray-800"
+  }
 }
 
 // ─── Billing block (PO / invoice workflow) ───

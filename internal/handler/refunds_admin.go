@@ -46,7 +46,7 @@ import (
 // substitute a fake so every refusal path runs without a database.
 type refundsAdminStore interface {
 	payment.RefundStore
-	ListRefundsByOrder(ctx context.Context, orderID string) ([]*model.Refund, error)
+	ListRefundsByOrder(ctx context.Context, orderID string, sort store.Sort) ([]*model.Refund, error)
 }
 
 var _ refundsAdminStore = (*store.Store)(nil)
@@ -54,11 +54,20 @@ var _ refundsAdminStore = (*store.Store)(nil)
 // RefundsAdminHandler exposes the §79 refund endpoints.
 type RefundsAdminHandler struct {
 	Store refundsAdminStore
+	// Webhook dispatches order.refunded when a refund lands (plan
+	// §35). Optional and nil-guarded at the call site, the same
+	// pattern as AdminHandler.Webhook and OrderAdminHandler.Webhook.
+	Webhook *service.WebhookService
 }
 
 // NewRefundsAdminHandler wires the handler to the store.
 func NewRefundsAdminHandler(s *store.Store) *RefundsAdminHandler {
 	return &RefundsAdminHandler{Store: s}
+}
+
+// SetWebhook wires the merchant webhook dispatcher into this handler.
+func (h *RefundsAdminHandler) SetWebhook(w *service.WebhookService) {
+	h.Webhook = w
 }
 
 // Refund answers POST /admin/orders/:id/refund.
@@ -127,12 +136,41 @@ func (h *RefundsAdminHandler) Refund(c *gin.Context) {
 	if after, err := h.Store.FindOrderByID(c, order.ID); err == nil && after != nil {
 		status = after.Status
 	}
+	// order.refunded (plan §35) — but only once the order has
+	// actually reached refunded. A partial refund leaves it paid, and
+	// this plan's vocabulary has no partial-refund event (deferred,
+	// see the report). The amount is the refund row's, not the
+	// order's, so a receiver can tell a part from the whole.
+	// Best-effort: the money has already gone back.
+	if h.Webhook != nil && status == model.OrderStatusRefunded {
+		if pid := orderProductID(order); pid != "" {
+			h.Webhook.Dispatch(c, pid, model.EventOrderRefunded, map[string]any{
+				"order_id": order.ID, "order_number": order.OrderNumber,
+				"refund_id": row.ID, "amount_minor": row.AmountMinor,
+				"currency": order.Currency, "reason": row.Reason,
+			})
+		}
+	}
 	response.OK(c, gin.H{"refund": row, "order_status": status})
 }
 
+// refundSortColumns is what ?sort= accepts on the refund ledger: the
+// columns the table shows, qualified with the bun model alias
+// ("refund"). "amount" is the amount_minor column. This orders the
+// READ — the ledger's own append order is immutable (see
+// refunds.go); an unknown key keeps the default, newest first
+// (listSortOrDefault).
+var refundSortColumns = map[string]sortCol{
+	"created_at": {Expr: "refund.created_at", Desc: true},
+	"amount":     {Expr: "refund.amount_minor", Desc: true},
+	"status":     {Expr: "refund.status"},
+	"provider":   {Expr: "refund.payment_provider"},
+}
+
 // ListRefunds answers GET /admin/orders/:id/refunds — the order's
-// whole refund ledger, newest first (pending and failed rows are
-// history too and are never filtered out).
+// whole refund ledger, newest first by default (pending and failed
+// rows are history too and are never filtered out; ?sort= may read it
+// in another order).
 func (h *RefundsAdminHandler) ListRefunds(c *gin.Context) {
 	id := c.Param("id")
 	order, err := h.Store.FindOrderByID(c, id)
@@ -140,7 +178,8 @@ func (h *RefundsAdminHandler) ListRefunds(c *gin.Context) {
 		response.Err(c, 404, "ORDER_NOT_FOUND", "order not found")
 		return
 	}
-	rows, err := h.Store.ListRefundsByOrder(c, order.ID)
+	sortOrder := listSortOrDefault(c, refundSortColumns, "created_at")
+	rows, err := h.Store.ListRefundsByOrder(c, order.ID, sortOrder)
 	if err != nil {
 		response.Internal(c, err)
 		return

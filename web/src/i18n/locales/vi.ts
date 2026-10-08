@@ -49,6 +49,7 @@ const vi = {
   "common.no": "Không",
   "common.unlimited": "Không giới hạn",
   "common.unlimitedSymbol": "∞",
+  "common.sortBy": "Sắp xếp theo",
 
   // Nav
   "nav.dashboard": "Tổng quan",
@@ -617,6 +618,7 @@ const vi = {
   "status.pending": "Đang chờ",
   "status.delivered": "Đã gửi",
   "status.failed": "Thất bại",
+  "status.succeeded": "Thành công",
   "status.paused": "Tạm dừng",
 
   // Webhooks extras
@@ -705,6 +707,20 @@ const vi = {
   "customers.provider": "Nhà cung cấp",
   "customers.periodRange": "Kỳ",
   "customers.cancelAtEnd": "Hủy cuối kỳ",
+
+  // Hành động quyền riêng tư của admin (plan §82): xuất & ẩn danh người dùng.
+  "customers.exportAction": "Xuất dữ liệu",
+  "customers.exportDone": "Đã tải bản xuất dữ liệu.",
+  "customers.anonymizeAction": "Ẩn danh",
+  "customers.anonymizeTitle": "Ẩn danh người dùng này?",
+  "customers.anonymizeDesc":
+    "Danh tính của người dùng sẽ bị xóa và mọi thông tin đăng nhập bị thu hồi. Đơn hàng, hóa đơn, hoàn tiền, giấy phép và nhật ký kiểm toán được giữ lại vì lý do pháp lý và kế toán.",
+  "customers.anonymizeConfirm": "Ẩn danh",
+  "customers.anonymizeDone": "Đã ẩn danh người dùng.",
+  "customers.anonymizeResultTitle": "Kết quả ẩn danh",
+  "customers.anonymizeResultEmail": "Email mới",
+  "customers.anonymizeResultRetained": "Hồ sơ được giữ lại",
+  "customers.anonymizeResultNote": "Ghi chú",
 
   // Licenses refund
   "licenses.refund": "Hoàn tiền",
@@ -1060,6 +1076,11 @@ const vi = {
   "orders.issuedAt": "Ngày phát hành",
   "orders.dueAt": "Hạn thanh toán",
   "orders.invoicesEmpty": "Chưa có hóa đơn nào cho đơn hàng này.",
+  "orders.invoiceNumber": "Số hóa đơn",
+  "orders.refunds": "Hoàn tiền",
+  "orders.refundsEmpty": "Chưa có khoản hoàn tiền nào cho đơn hàng này.",
+  "orders.refundAmount": "Số tiền",
+  "orders.refundReason": "Lý do",
   "orders.refund": "Hoàn tiền đơn hàng",
   "orders.refundTitle": "Hoàn tiền đơn hàng này?",
   "orders.refundDesc":
@@ -1742,6 +1763,18 @@ const vi = {
   "notifications.events.release.published": "Đã phát hành bản mới",
   "notifications.events.release.yanked": "Bản phát hành bị gỡ",
   "notifications.events.release.unyanked": "Đã khôi phục bản phát hành",
+  "notifications.events.product.created": "Đã tạo sản phẩm",
+  "notifications.events.product.updated": "Đã cập nhật sản phẩm",
+  "notifications.events.product.deleted": "Đã xóa sản phẩm",
+  "notifications.events.order.failed": "Đơn hàng thất bại",
+  "notifications.events.order.refunded": "Đơn hàng đã hoàn tiền",
+  "notifications.events.invoice.paid": "Hóa đơn đã thanh toán",
+  "notifications.events.invoice.voided": "Hóa đơn đã hủy",
+  "notifications.events.subscription.renewed": "Đã gia hạn đăng ký",
+  "notifications.events.usage.threshold_reached": "Đã chạm ngưỡng sử dụng",
+  "notifications.colEvent": "Sự kiện",
+  "notifications.colPriority": "Mức ưu tiên",
+  "notifications.colRead": "Đã đọc",
 
   // RBAC (plan §8) — vai trò tùy chỉnh & quyền.
   "rbac.title": "Vai trò & phân quyền",
@@ -1920,6 +1953,30 @@ const vi = {
   "surfaces.customerPortal": "Cổng khách hàng",
   "surfaces.merchantPortal": "Cổng đối tác",
   "surfaces.marketplace": "Chợ ứng dụng",
+  // Privacy & data (plan §82)
+  "privacy.nav": "Quyền riêng tư & dữ liệu",
+  "privacy.title": "Quyền riêng tư & dữ liệu",
+  "privacy.desc": "Tải xuống bản sao mọi dữ liệu nền tảng lưu về bạn, hoặc xóa tài khoản của bạn.",
+  "privacy.exportTitle": "Xuất dữ liệu của tôi",
+  "privacy.exportDesc":
+    "Tải tệp JSON gồm hồ sơ, ghế và lời mời, giấy phép, đơn hàng, hóa đơn, đăng ký, thông báo, thông tin khóa API và dữ liệu tiếp thị liên kết. Khóa bí mật của API key và webhook không bao giờ được kèm theo; khóa giấy phép thì có, vì đó là thông tin đăng nhập của riêng bạn.",
+  "privacy.exportButton": "Tải dữ liệu của tôi (JSON)",
+  "privacy.exportDone": "Đã tải xuống bản xuất dữ liệu của bạn.",
+  "privacy.deleteTitle": "Xóa tài khoản của tôi",
+  "privacy.deleteDesc":
+    "Thao tác này xóa danh tính của bạn khỏi nền tảng và thu hồi mọi thông tin đăng nhập. Không thể hoàn tác.",
+  "privacy.deleteErased":
+    "Bị xóa và thu hồi: email, tên và ảnh đại diện của bạn, mọi phiên đăng nhập và mã làm mới, khóa API, đăng nhập liên kết, mã xác thực đang chờ và thông báo.",
+  "privacy.deleteRetained":
+    "Được giữ lại: đơn hàng, hóa đơn, hoàn tiền, giấy phép và nhật ký kiểm toán — vì lý do pháp lý, thuế và kế toán.",
+  "privacy.deleteConfirmLabel": "Nhập email của bạn để xác nhận",
+  "privacy.deleteConfirmHint": "Nút xóa sẽ mở khóa khi nội dung này khớp chính xác với email tài khoản của bạn.",
+  "privacy.deleteButton": "Xóa tài khoản của tôi",
+  "privacy.deleteDialogTitle": "Xóa tài khoản của bạn?",
+  "privacy.deleteDialogBody":
+    "Tài khoản của bạn sẽ được ẩn danh ngay lập tức và mọi thông tin đăng nhập bị thu hồi. Đơn hàng, hóa đơn và giấy phép được giữ lại vì lý do pháp lý và kế toán. Không thể hoàn tác.",
+  "privacy.deleteDialogConfirm": "Có, xóa tài khoản của tôi",
+  "privacy.deleted": "Tài khoản của bạn đã được xóa. Đang đăng xuất…",
 } as const
 
 export default vi

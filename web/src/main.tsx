@@ -45,6 +45,7 @@ import LoginPage from "@/pages/login"
 import MarketplacePage from "@/pages/marketplace"
 import MarketplaceProductPage from "@/pages/marketplace-product"
 import PortalAccountPage from "@/pages/portal/account"
+import AccountPrivacyPage from "@/pages/portal/account-privacy"
 import PortalAPIKeysPage from "@/pages/portal/api-keys"
 import PortalDashboardPage from "@/pages/portal/dashboard"
 import PortalDevicesPage from "@/pages/portal/devices"
@@ -162,6 +163,7 @@ createRoot(document.getElementById("root")!).render(
                         <Route path="notifications" element={<NotificationsPage />} />
                         <Route path="support" element={<PortalSupportPage />} />
                         <Route path="account" element={<PortalAccountPage />} />
+                        <Route path="privacy" element={<AccountPrivacyPage />} />
                       </Route>
 
                       <Route path="*" element={<Navigate to="/login" replace />} />

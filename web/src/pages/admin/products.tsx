@@ -25,7 +25,9 @@ import {
   DataTableHeader,
   DataTablePagination,
   DataTableRow,
+  DataTableSortHead,
   useServerPagination,
+  useServerSort,
 } from "@/components/ui/data-table"
 import {
   Dialog,
@@ -49,10 +51,14 @@ export default function ProductsPage() {
   // ?search= pre-fills the box: global search (and the command
   // palette) deep-link to this list narrowed to the hit they found.
   const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("search") || "")
-  const pg = useServerPagination(10, [search])
+  // Server-side column sorting (plan §70). Reordering reshuffles
+  // every page, so the sort state joins the filters that send the
+  // pager back to page one.
+  const srt = useServerSort("created_at", "desc")
+  const pg = useServerPagination(10, [search, srt.sort, srt.order])
   const { data, isLoading } = useQuery({
-    queryKey: ["admin", "products", search, pg.page, pg.pageSize],
-    queryFn: () => admin.listProducts({ search, ...pg.params }),
+    queryKey: ["admin", "products", search, srt.sort, srt.order, pg.page, pg.pageSize],
+    queryFn: () => admin.listProducts({ search, ...srt.params, ...pg.params }),
   })
   const [editing, setEditing] = useState<Product | null>(null)
   const [creating, setCreating] = useState(false)
@@ -132,10 +138,18 @@ export default function ProductsPage() {
               <DataTable>
                 <DataTableHeader>
                   <DataTableRow>
-                    <DataTableHead>{t("common.name")}</DataTableHead>
-                    <DataTableHead>{t("products.slug")}</DataTableHead>
-                    <DataTableHead>{t("common.type")}</DataTableHead>
-                    <DataTableHead>{t("common.created")}</DataTableHead>
+                    <DataTableSortHead sort={srt} column="name" firstOrder="asc">
+                      {t("common.name")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="slug" firstOrder="asc">
+                      {t("products.slug")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="type" firstOrder="asc">
+                      {t("common.type")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="created_at" firstOrder="desc">
+                      {t("common.created")}
+                    </DataTableSortHead>
                     <DataTableHead className="w-32 text-right">{t("common.actions")}</DataTableHead>
                   </DataTableRow>
                 </DataTableHeader>

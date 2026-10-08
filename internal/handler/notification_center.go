@@ -44,7 +44,7 @@ type NotificationCenterHandler struct {
 // below); tests substitute a fake so the handler can be exercised
 // without a database.
 type notificationCenterStore interface {
-	ListUserNotifications(ctx context.Context, userID string, unreadOnly bool, p store.Page) ([]*model.UserNotification, int, error)
+	ListUserNotifications(ctx context.Context, userID string, unreadOnly bool, p store.Page, sort store.Sort) ([]*model.UserNotification, int, error)
 	CountUnread(ctx context.Context, userID string) (int, error)
 	MarkRead(ctx context.Context, id, userID string) error
 	MarkAllRead(ctx context.Context, userID string) (int, error)
@@ -91,6 +91,19 @@ func notificationUser(c *gin.Context) (string, bool) {
 	return userID, true
 }
 
+// notificationSortColumns is what ?sort= accepts on the notification
+// inbox: the columns the rows carry. The expressions are qualified
+// with the bun model alias ("user_notification"); "read_at" sorts the
+// read receipts, with the unread rows (no receipt) trailing after
+// them under NULLS LAST either way. Unknown keys keep the default
+// ordering (listSortOrDefault), newest first.
+var notificationSortColumns = map[string]sortCol{
+	"created_at": {Expr: `"user_notification".created_at`, Desc: true},
+	"event":      {Expr: `"user_notification".event`},
+	"priority":   {Expr: `"user_notification".priority`, Desc: true},
+	"read_at":    {Expr: `"user_notification".read_at`, Desc: true},
+}
+
 // List answers GET /portal/notifications: one page of the caller's
 // inbox, newest first, with total/limit/offset and the unread badge
 // count beside it (one round trip instead of a list plus a badge
@@ -106,7 +119,8 @@ func (h *NotificationCenterHandler) List(c *gin.Context) {
 		return
 	}
 	page := listPage(c)
-	rows, total, err := h.store.ListUserNotifications(c.Request.Context(), userID, unreadOnly, page)
+	order := listSortOrDefault(c, notificationSortColumns, "created_at")
+	rows, total, err := h.store.ListUserNotifications(c.Request.Context(), userID, unreadOnly, page, order)
 	if err != nil {
 		response.Internal(c, err)
 		return

@@ -24,7 +24,9 @@ import {
   DataTableHeader,
   DataTablePagination,
   DataTableRow,
+  DataTableSortHead,
   useServerPagination,
+  useServerSort,
 } from "@/components/ui/data-table"
 import {
   Dialog,
@@ -67,10 +69,13 @@ export default function CouponsPage() {
   const { t } = useI18n()
   const qc = useQueryClient()
   const [search, setSearch] = useState("")
-  const pg = useServerPagination(10, [search])
+  // Server-side column sorting (plan §70): the sort state joins the
+  // filters so a re-sort lands on the first page of the new order.
+  const srt = useServerSort("created_at", "desc")
+  const pg = useServerPagination(10, [search, srt.sort, srt.order])
   const { data, isLoading } = useQuery({
-    queryKey: ["admin", "coupons", search, pg.page, pg.pageSize],
-    queryFn: () => admin.listCoupons({ search, ...pg.params }),
+    queryKey: ["admin", "coupons", search, srt.sort, srt.order, pg.page, pg.pageSize],
+    queryFn: () => admin.listCoupons({ search, ...srt.params, ...pg.params }),
   })
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<Coupon | null>(null)
@@ -140,12 +145,22 @@ export default function CouponsPage() {
               <DataTable>
                 <DataTableHeader>
                   <DataTableRow>
-                    <DataTableHead>{t("coupons.code")}</DataTableHead>
-                    <DataTableHead>{t("common.type")}</DataTableHead>
+                    <DataTableSortHead sort={srt} column="code" firstOrder="asc">
+                      {t("coupons.code")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="type" firstOrder="asc">
+                      {t("common.type")}
+                    </DataTableSortHead>
                     <DataTableHead>{t("coupons.colValue")}</DataTableHead>
-                    <DataTableHead>{t("coupons.colValidity")}</DataTableHead>
-                    <DataTableHead>{t("coupons.colRedemptions")}</DataTableHead>
-                    <DataTableHead>{t("common.status")}</DataTableHead>
+                    <DataTableSortHead sort={srt} column="expires_at" firstOrder="asc">
+                      {t("coupons.colValidity")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="redemptions" firstOrder="desc">
+                      {t("coupons.colRedemptions")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="active" firstOrder="desc">
+                      {t("common.status")}
+                    </DataTableSortHead>
                     <DataTableHead className="w-24 text-right">{t("common.actions")}</DataTableHead>
                   </DataTableRow>
                 </DataTableHeader>

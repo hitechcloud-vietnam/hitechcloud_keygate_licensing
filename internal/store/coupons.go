@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/coupon"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 )
@@ -35,13 +37,23 @@ func (s *Store) FindCouponByCode(ctx context.Context, code string) (*model.Coupo
 		Scan(ctx)
 }
 
-func (s *Store) ListCoupons(ctx context.Context, search string, p Page) ([]*model.Coupon, int, error) {
-	var out []*model.Coupon
-	q := s.DB.NewSelect().Model(&out).
-		OrderExpr("created_at DESC, id DESC")
+// couponsListQuery builds the coupon catalogue listing. The sort is
+// the handler's validated ordering; an empty one takes the listing's
+// default, newest first.
+func couponsListQuery(db bun.IDB, search string, sort Sort, dest *[]*model.Coupon) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: "coupon.created_at", Desc: true}
+	}
+	q := db.NewSelect().Model(dest)
 	if search != "" {
 		q = q.Where("code ILIKE ?", "%"+search+"%")
 	}
+	return applySort(q, sort, "coupon.id")
+}
+
+func (s *Store) ListCoupons(ctx context.Context, search string, p Page, sort Sort) ([]*model.Coupon, int, error) {
+	var out []*model.Coupon
+	q := couponsListQuery(s.DB, search, sort, &out)
 	total, err := scanPage(ctx, q, p)
 	if err != nil {
 		return nil, 0, err

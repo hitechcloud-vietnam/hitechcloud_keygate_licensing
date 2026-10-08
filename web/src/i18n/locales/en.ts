@@ -47,6 +47,7 @@ const en = {
   "common.no": "No",
   "common.unlimited": "Unlimited",
   "common.unlimitedSymbol": "∞",
+  "common.sortBy": "Sort by",
 
   // Nav
   "nav.dashboard": "Dashboard",
@@ -611,6 +612,7 @@ const en = {
   "status.pending": "Pending",
   "status.delivered": "Delivered",
   "status.failed": "Failed",
+  "status.succeeded": "Succeeded",
   "status.paused": "Paused",
 
   // Webhooks extras
@@ -699,6 +701,20 @@ const en = {
   "customers.provider": "Provider",
   "customers.periodRange": "Period",
   "customers.cancelAtEnd": "Cancel at End",
+
+  // Admin privacy actions (plan §82): export & anonymize any user.
+  "customers.exportAction": "Export data",
+  "customers.exportDone": "Export downloaded.",
+  "customers.anonymizeAction": "Anonymize",
+  "customers.anonymizeTitle": "Anonymize this user?",
+  "customers.anonymizeDesc":
+    "The user's identity is erased and every credential revoked. Orders, invoices, refunds, licenses and audit logs are preserved for legal and accounting reasons.",
+  "customers.anonymizeConfirm": "Anonymize",
+  "customers.anonymizeDone": "User anonymized.",
+  "customers.anonymizeResultTitle": "Anonymization result",
+  "customers.anonymizeResultEmail": "New email",
+  "customers.anonymizeResultRetained": "Preserved records",
+  "customers.anonymizeResultNote": "Note",
 
   // Licenses refund
   "licenses.refund": "Refund",
@@ -1053,6 +1069,11 @@ const en = {
   "orders.issuedAt": "Issued",
   "orders.dueAt": "Due",
   "orders.invoicesEmpty": "No invoices drawn against this order.",
+  "orders.invoiceNumber": "Invoice number",
+  "orders.refunds": "Refunds",
+  "orders.refundsEmpty": "No refunds against this order.",
+  "orders.refundAmount": "Amount",
+  "orders.refundReason": "Reason",
   "orders.refund": "Refund order",
   "orders.refundTitle": "Refund this order?",
   "orders.refundDesc":
@@ -1736,6 +1757,18 @@ const en = {
   "notifications.events.release.published": "New release published",
   "notifications.events.release.yanked": "Release yanked",
   "notifications.events.release.unyanked": "Release restored",
+  "notifications.events.product.created": "Product created",
+  "notifications.events.product.updated": "Product updated",
+  "notifications.events.product.deleted": "Product deleted",
+  "notifications.events.order.failed": "Order failed",
+  "notifications.events.order.refunded": "Order refunded",
+  "notifications.events.invoice.paid": "Invoice paid",
+  "notifications.events.invoice.voided": "Invoice voided",
+  "notifications.events.subscription.renewed": "Subscription renewed",
+  "notifications.events.usage.threshold_reached": "Usage threshold reached",
+  "notifications.colEvent": "Event",
+  "notifications.colPriority": "Priority",
+  "notifications.colRead": "Read",
 
   // RBAC (plan §8) — custom roles & permissions.
   "rbac.title": "Roles & access",
@@ -1913,6 +1946,30 @@ const en = {
   "surfaces.customerPortal": "Customer portal",
   "surfaces.merchantPortal": "Merchant portal",
   "surfaces.marketplace": "Marketplace",
+  // Privacy & data (plan §82)
+  "privacy.nav": "Privacy & data",
+  "privacy.title": "Privacy & data",
+  "privacy.desc": "Download a copy of everything this platform holds about you, or delete your account.",
+  "privacy.exportTitle": "Export my data",
+  "privacy.exportDesc":
+    "Download a JSON file with your profile, seats and invites, licenses, orders, invoices, subscriptions, notifications, API key metadata and affiliate records. API key and webhook secrets are never included; your license keys are, since they are your own credentials.",
+  "privacy.exportButton": "Download my data (JSON)",
+  "privacy.exportDone": "Your data export has been downloaded.",
+  "privacy.deleteTitle": "Delete my account",
+  "privacy.deleteDesc":
+    "This erases your identity from the platform and revokes every credential. It cannot be undone.",
+  "privacy.deleteErased":
+    "Erased and revoked: your email, name and avatar, all sessions and refresh tokens, API keys, connected sign-ins, pending codes and notifications.",
+  "privacy.deleteRetained":
+    "Preserved: orders, invoices, refunds, licenses and audit logs — kept for legal, tax and accounting reasons.",
+  "privacy.deleteConfirmLabel": "Type your email to confirm",
+  "privacy.deleteConfirmHint": "The delete button unlocks when this matches your account email exactly.",
+  "privacy.deleteButton": "Delete my account",
+  "privacy.deleteDialogTitle": "Delete your account?",
+  "privacy.deleteDialogBody":
+    "Your account will be anonymized immediately and every credential revoked. Orders, invoices and licenses are kept for legal and accounting reasons. This cannot be undone.",
+  "privacy.deleteDialogConfirm": "Yes, delete my account",
+  "privacy.deleted": "Your account has been deleted. Signing you out…",
 } as const
 
 export default en

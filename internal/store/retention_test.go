@@ -161,7 +161,7 @@ func TestRetentionNeverDeletesFinancialRecords(t *testing.T) {
 	if got.Status != model.OrderStatusRefunded || got.RefundedMinor != 900 {
 		t.Errorf("order changed by the sweep: %+v", got)
 	}
-	refs, err := s.ListRefundsByOrder(ctx, o.ID)
+	refs, err := s.ListRefundsByOrder(ctx, o.ID, Sort{})
 	if err != nil {
 		t.Fatalf("refunds must survive the retention sweep: %v", err)
 	}

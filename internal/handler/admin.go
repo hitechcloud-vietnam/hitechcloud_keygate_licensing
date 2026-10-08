@@ -518,6 +518,20 @@ func (h *AdminHandler) checkCategoryIDs(c *gin.Context, ids []string) bool {
 	return true
 }
 
+// productSortColumns is what ?sort= accepts on the admin product
+// list: the columns the catalogue table actually shows. Every
+// expression is qualified with the bun model alias ("product") so it
+// correlates with the listing's FROM clause, and the map is the whole
+// of the resolution — nothing a caller sends can reach the ORDER BY.
+// Unknown keys keep the default ordering (listSortOrDefault).
+var productSortColumns = map[string]sortCol{
+	"created_at": {Expr: "product.created_at", Desc: true},
+	"name":       {Expr: "product.name"},
+	"slug":       {Expr: "product.slug"},
+	"type":       {Expr: "product.type"},
+	"updated_at": {Expr: "product.updated_at", Desc: true},
+}
+
 func (h *AdminHandler) ListProducts(c *gin.Context) {
 	// type=desktop,hybrid narrows the catalogue to the kinds the
 	// caller can use. An unknown kind is refused rather than ignored:
@@ -535,7 +549,8 @@ func (h *AdminHandler) ListProducts(c *gin.Context) {
 		}
 	}
 	page := listPage(c)
-	products, total, err := h.Store.ListProducts(c, c.Query("search"), types, page)
+	order := listSortOrDefault(c, productSortColumns, "created_at")
+	products, total, err := h.Store.ListProducts(c, c.Query("search"), types, page, order)
 	if err != nil {
 		response.Internal(c, err)
 		return
@@ -698,6 +713,15 @@ func (h *AdminHandler) CreateProduct(c *gin.Context) {
 		Changes: map[string]any{"name": req.Name, "slug": req.Slug, "type": req.Type,
 			"feed_license_required": req.FeedLicenseRequired},
 	})
+
+	// Catalogue webhook (plan §35), best-effort like every dispatch:
+	// a receiver being down must not fail the product that was just
+	// created.
+	if h.Webhook != nil {
+		h.Webhook.Dispatch(c, p.ID, model.EventProductCreated, map[string]any{
+			"product_id": p.ID, "name": p.Name, "slug": p.Slug, "type": p.Type,
+		})
+	}
 
 	cats, err := h.Store.CategoriesForProducts(c, []string{p.ID})
 	if err != nil {
@@ -1087,6 +1111,13 @@ func (h *AdminHandler) UpdateProduct(c *gin.Context) {
 		Entity: "product", EntityID: p.ID, Action: "updated",
 		ActorType: "admin", ActorID: adminID(c),
 	})
+	// Catalogue webhook (plan §35), best-effort. The payload names the
+	// row as it now stands; what changed is in the audit line.
+	if h.Webhook != nil {
+		h.Webhook.Dispatch(c, p.ID, model.EventProductUpdated, map[string]any{
+			"product_id": p.ID, "name": p.Name, "slug": p.Slug, "type": p.Type,
+		})
+	}
 	cats, err := h.Store.CategoriesForProducts(c, []string{p.ID})
 	if err != nil {
 		response.Internal(c, err)
@@ -1121,6 +1152,16 @@ func (h *AdminHandler) DeleteProduct(c *gin.Context) {
 			"cannot delete a product that still has plans; delete them first")
 		return
 	}
+	// The row's name and slug ride the deletion event, so they are
+	// read before the row goes — a receiver archiving its own
+	// catalogue copy cannot look them up afterwards. Only read when
+	// there is somewhere to send them.
+	payload := map[string]any{"product_id": id}
+	if h.Webhook != nil {
+		if p, err := h.Store.FindProductByID(c, id); err == nil && p != nil {
+			payload["name"], payload["slug"], payload["type"] = p.Name, p.Slug, p.Type
+		}
+	}
 	if err := h.Store.DeleteProduct(c, id); err != nil {
 		response.Internal(c, err)
 		return
@@ -1129,6 +1170,9 @@ func (h *AdminHandler) DeleteProduct(c *gin.Context) {
 		Entity: "product", EntityID: id, Action: "deleted",
 		ActorType: "admin", ActorID: adminID(c),
 	})
+	if h.Webhook != nil {
+		h.Webhook.Dispatch(c, id, model.EventProductDeleted, payload)
+	}
 	response.NoContent(c)
 }
 
@@ -3163,11 +3207,23 @@ func (h *AdminHandler) DeleteActivation(c *gin.Context) {
 
 // ─── Audit Logs ───
 
+// auditSortColumns is what ?sort= accepts on the audit-log list. The
+// expressions are qualified with the bun model alias ("audit_log");
+// "actor" is the actor id column — the only actor identifier the
+// table has. Unknown keys keep the default ordering.
+var auditSortColumns = map[string]sortCol{
+	"created_at": {Expr: "audit_log.created_at", Desc: true},
+	"entity":     {Expr: "audit_log.entity"},
+	"action":     {Expr: "audit_log.action"},
+	"actor":      {Expr: "audit_log.actor_id"},
+}
+
 func (h *AdminHandler) ListAuditLogs(c *gin.Context) {
 	page := listPage(c)
+	order := listSortOrDefault(c, auditSortColumns, "created_at")
 	logs, total, err := h.Store.ListAuditLogs(c,
 		c.Query("entity"), c.Query("entity_id"), c.Query("product_id"),
-		page.Offset, page.Limit)
+		page.Offset, page.Limit, order)
 	if err != nil {
 		response.Internal(c, err)
 		return
@@ -3177,9 +3233,20 @@ func (h *AdminHandler) ListAuditLogs(c *gin.Context) {
 
 // ─── Users ───
 
+// userSortColumns is what ?sort= accepts on the customer list. The
+// table alias "user" is a reserved word, so every qualifier is
+// double-quoted, and email sorts case-insensitively like every email
+// lookup. Unknown keys keep the default ordering.
+var userSortColumns = map[string]sortCol{
+	"created_at": {Expr: `"user".created_at`, Desc: true},
+	"email":      {Expr: `lower("user".email)`},
+	"name":       {Expr: `"user".name`},
+}
+
 func (h *AdminHandler) ListUsers(c *gin.Context) {
 	page := listPage(c)
-	users, total, err := h.Store.ListUsers(c, c.Query("search"), page.Offset, page.Limit)
+	order := listSortOrDefault(c, userSortColumns, "created_at")
+	users, total, err := h.Store.ListUsers(c, c.Query("search"), page.Offset, page.Limit, order)
 	if err != nil {
 		response.Internal(c, err)
 		return

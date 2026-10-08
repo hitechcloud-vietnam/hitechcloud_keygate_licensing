@@ -143,7 +143,7 @@ func TestTenantIsolationAcrossPortalResources(t *testing.T) {
 	if err != nil || total != 1 || len(keys) != 1 || keys[0].ID != aKey.ID {
 		t.Errorf("alice's key list = %d/%d rows err=%v, want only hers", len(keys), total, err)
 	}
-	notifs, total, err := s.ListUserNotifications(ctx, alice, false, page)
+	notifs, total, err := s.ListUserNotifications(ctx, alice, false, page, store.Sort{})
 	if err != nil || total != 1 || len(notifs) != 1 || notifs[0].ID != aNotif.ID {
 		t.Errorf("alice's inbox = %d/%d rows err=%v, want only hers", len(notifs), total, err)
 	}

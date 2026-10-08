@@ -15,8 +15,8 @@ import (
 // every one of them: the client translates the event name, so the key
 // is the name — always.
 func TestNewUserNotificationAcceptsWholeVocabulary(t *testing.T) {
-	if len(CustomerWebhookEvents) != 19 {
-		t.Fatalf("CustomerWebhookEvents has %d entries, want 19", len(CustomerWebhookEvents))
+	if len(CustomerWebhookEvents) != 28 {
+		t.Fatalf("CustomerWebhookEvents has %d entries, want 28", len(CustomerWebhookEvents))
 	}
 	for _, ev := range CustomerWebhookEvents {
 		n, err := NewUserNotification("u1", ev, nil, "", "")

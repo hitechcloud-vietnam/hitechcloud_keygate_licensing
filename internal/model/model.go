@@ -860,6 +860,21 @@ const (
 	EventReleasePublished        = "release.published"
 	EventReleaseYanked           = "release.yanked"
 	EventReleaseUnyanked         = "release.unyanked"
+	// Commerce lifecycle (plan §35): catalogue changes and the
+	// order/invoice/subscription events the ledger emits at the
+	// natural business point — a product row written, an order's
+	// payment failing or its money going back, an invoice settling or
+	// being voided, a paid period extending a subscription, usage
+	// crossing its threshold.
+	EventProductCreated        = "product.created"
+	EventProductUpdated        = "product.updated"
+	EventProductDeleted        = "product.deleted"
+	EventOrderFailed           = "order.failed"
+	EventOrderRefunded         = "order.refunded"
+	EventInvoicePaid           = "invoice.paid"
+	EventInvoiceVoided         = "invoice.voided"
+	EventSubscriptionRenewed   = "subscription.renewed"
+	EventUsageThresholdReached = "usage.threshold_reached"
 )
 
 // ─── Release (logical release event) ───

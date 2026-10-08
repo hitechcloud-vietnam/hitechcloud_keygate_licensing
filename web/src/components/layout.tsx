@@ -387,6 +387,7 @@ export function PortalLayout() {
     { to: "/portal/webhooks", label: t("nav.webhooks"), icon: Link2 },
     { to: "/portal/support", label: t("nav.support"), icon: LifeBuoy },
     { to: "/portal/account", label: t("nav.settings"), icon: User },
+    { to: "/portal/privacy", label: t("privacy.nav"), icon: ShieldCheck },
   ]
   const location = useLocation()
 

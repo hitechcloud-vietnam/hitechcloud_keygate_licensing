@@ -101,7 +101,7 @@ func (h *PortalCommerceHandler) GetOrder(c *gin.Context) {
 		portalWriteLookupErr(c, err, "order not found")
 		return
 	}
-	invoices, err := h.store.ListInvoicesByOrder(c.Request.Context(), o.ID)
+	invoices, err := h.store.ListInvoicesByOrder(c.Request.Context(), o.ID, store.Sort{})
 	if err != nil {
 		response.Internal(c, err)
 		return
@@ -124,7 +124,7 @@ func (h *PortalCommerceHandler) ListInvoices(c *gin.Context) {
 		portalWriteLookupErr(c, err, "order not found")
 		return
 	}
-	invoices, err := h.store.ListInvoicesByOrder(c.Request.Context(), o.ID)
+	invoices, err := h.store.ListInvoicesByOrder(c.Request.Context(), o.ID, store.Sort{})
 	if err != nil {
 		response.Internal(c, err)
 		return

@@ -93,7 +93,7 @@ func TestOrderAttribution_RoundTrip(t *testing.T) {
 	// The list search stays scoped on customer_email / order_number —
 	// attribution never leaked into it — and the new column is simply
 	// present on the rows it returns.
-	rows, total, err := s.ListOrders(ctx, withAttr.CustomerEmail, "", store.Page{Limit: 10})
+	rows, total, err := s.ListOrders(ctx, withAttr.CustomerEmail, "", store.Page{Limit: 10}, store.Sort{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

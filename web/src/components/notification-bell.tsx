@@ -31,7 +31,7 @@ export function humanizeEvent(event: string): string {
 }
 
 // notificationTitle renders a row's text from its title_key (the
-// event name). The 19 platform events have notifications.events.*
+// event name). The 28 platform events have notifications.events.*
 // keys in every locale; anything else humanizes.
 export function notificationTitle(t: Translate, n: NotificationItem): string {
   const key = `notifications.events.${n.title_key || n.event}` as TranslationKeys

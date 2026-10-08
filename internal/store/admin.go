@@ -16,6 +16,30 @@ import (
 
 // ─── Product ───
 
+// productsAdminQuery builds the admin catalogue listing. The sort is
+// already validated by the handler's allowlist; an empty one (a store
+// caller that does not care) falls back to the listing's own default,
+// newest first, so the statement is never an ORDER BY syntax error
+// waiting to happen. Qualifiers use the bun model alias ("product" —
+// snake_case of the STRUCT name, see bun_alias_test.go), and
+// applySort's id tiebreaker keeps the order total: two products
+// created in the same instant would otherwise be free to swap places
+// between two queries, and under paging that means a row shown twice
+// while another is never shown at all.
+func productsAdminQuery(db bun.IDB, search string, types []string, sort Sort, dest *[]*model.Product) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: "product.created_at", Desc: true}
+	}
+	q := db.NewSelect().Model(dest)
+	if len(types) > 0 {
+		q = q.Where("type IN (?)", bun.List(types))
+	}
+	if search != "" {
+		q = q.Where("name ILIKE ? OR slug ILIKE ?", "%"+search+"%", "%"+search+"%")
+	}
+	return applySort(q, sort, "product.id")
+}
+
 // ListProducts returns one page of the catalogue and how many
 // products the filter matched.
 //
@@ -25,19 +49,11 @@ import (
 // difference between "these are the products you can pick" and "these
 // are the ones that were on screen".
 //
-// The order carries id as a tiebreaker: two products created in the
-// same instant would otherwise be free to swap places between two
-// queries, and under paging that means a row shown twice while
-// another is never shown at all.
-func (s *Store) ListProducts(ctx context.Context, search string, types []string, p Page) ([]*model.Product, int, error) {
+// sort is the validated ordering the caller asked for; the zero value
+// takes the listing's default, newest first.
+func (s *Store) ListProducts(ctx context.Context, search string, types []string, p Page, sort Sort) ([]*model.Product, int, error) {
 	var out []*model.Product
-	q := s.DB.NewSelect().Model(&out).OrderExpr("created_at DESC, id DESC")
-	if len(types) > 0 {
-		q = q.Where("type IN (?)", bun.List(types))
-	}
-	if search != "" {
-		q = q.Where("name ILIKE ? OR slug ILIKE ?", "%"+search+"%", "%"+search+"%")
-	}
+	q := productsAdminQuery(s.DB, search, types, sort, &out)
 	total, err := scanPage(ctx, q, p)
 	if err != nil {
 		return nil, 0, err
@@ -630,14 +646,20 @@ func (s *Store) ExportLicenses(ctx context.Context, productID, status string) ([
 
 // ─── Audit Log ───
 
-// ListAuditLogs returns paginated audit-log rows. Filters compose
-// with AND. The optional productID filter resolves the parent product
+// auditLogsQuery builds the audit-log listing. Filters compose with
+// AND. The optional productID filter resolves the parent product
 // across the entity types that carry a product_id FK (license, plan,
 // addon, webhook, release, api_key, plus the product row itself). It
 // is best-effort: 2-hop entities (seat, activation, release_artifact)
 // aren't matched and silently fall out of the filtered view.
-func (s *Store) ListAuditLogs(ctx context.Context, entity, entityID, productID string, offset, limit int) ([]*model.AuditLog, int, error) {
-	q := s.DB.NewSelect().Model((*model.AuditLog)(nil)).OrderExpr("created_at DESC, id DESC")
+// Qualifiers use the bun model alias ("audit_log"); an empty sort
+// falls back to newest first, the order the audit trail has always
+// read in.
+func auditLogsQuery(db bun.IDB, entity, entityID, productID string, sort Sort, dest *[]*model.AuditLog) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: "audit_log.created_at", Desc: true}
+	}
+	q := db.NewSelect().Model(dest)
 	if entity != "" {
 		q = q.Where("entity = ?", entity)
 	}
@@ -655,12 +677,17 @@ func (s *Store) ListAuditLogs(ctx context.Context, entity, entityID, productID s
          OR entity_id IN (SELECT id FROM api_keys  WHERE product_id = ?)
         )`, productID, productID, productID, productID, productID, productID, productID)
 	}
+	return applySort(q, sort, "audit_log.id")
+}
+
+func (s *Store) ListAuditLogs(ctx context.Context, entity, entityID, productID string, offset, limit int, sort Sort) ([]*model.AuditLog, int, error) {
+	var out []*model.AuditLog
+	q := auditLogsQuery(s.DB, entity, entityID, productID, sort, &out)
 	total, err := q.Count(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	var out []*model.AuditLog
-	err = q.Offset(offset).Limit(limit).Scan(ctx, &out)
+	err = q.Offset(offset).Limit(limit).Scan(ctx)
 	return out, total, err
 }
 
@@ -712,19 +739,30 @@ func (s *Store) GetStats(ctx context.Context) (*Stats, error) {
 
 // ─── Users ───
 
-// ListUsers returns only customers (role='user'). Admins are managed separately.
-func (s *Store) ListUsers(ctx context.Context, search string, offset, limit int) ([]*model.User, int, error) {
-	q := s.DB.NewSelect().Model((*model.User)(nil)).Where("role = 'user'")
+// usersAdminQuery builds the customer list (role='user'). The table
+// alias is "user" — snake_case of the STRUCT name — and it is a
+// reserved word, so every qualifier is double-quoted. An empty sort
+// falls back to newest first.
+func usersAdminQuery(db bun.IDB, search string, sort Sort, dest *[]*model.User) *bun.SelectQuery {
+	if sort.Expr == "" {
+		sort = Sort{Expr: `"user".created_at`, Desc: true}
+	}
+	q := db.NewSelect().Model(dest).Where("role = 'user'")
 	if search != "" {
 		q = q.Where("(email ILIKE ? OR name ILIKE ?)", "%"+search+"%", "%"+search+"%")
 	}
+	return applySort(q, sort, `"user".id`)
+}
+
+// ListUsers returns only customers (role='user'). Admins are managed separately.
+func (s *Store) ListUsers(ctx context.Context, search string, offset, limit int, sort Sort) ([]*model.User, int, error) {
+	var out []*model.User
+	q := usersAdminQuery(s.DB, search, sort, &out)
 	total, err := q.Count(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	var out []*model.User
-	err = q.OrderExpr("created_at DESC, id DESC").
-		Offset(offset).Limit(limit).Scan(ctx, &out)
+	err = q.Offset(offset).Limit(limit).Scan(ctx)
 	return out, total, err
 }
 

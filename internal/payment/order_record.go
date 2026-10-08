@@ -173,6 +173,20 @@ func (h *StripeHandler) recordOrder(ctx context.Context, lic *model.License, pla
 		return
 	}
 
+	// invoice.paid (plan §35): the money for this order was collected
+	// and the invoice is paid — the Stripe checkout's ledger close.
+	// Best-effort: the ledger row is in, and nothing downstream waits
+	// on a receiver being up. The unique-ref path above sends nothing:
+	// that order's invoice was paid once, and the event belongs to the
+	// pass that wrote it.
+	if h.WebhookSvc != nil {
+		h.WebhookSvc.Dispatch(ctx, plan.ProductID, model.EventInvoicePaid, map[string]any{
+			"invoice_id": inv.ID, "order_id": order.ID, "order_number": order.OrderNumber,
+			"invoice_number": inv.InvoiceNumber, "amount_minor": inv.TotalMinor,
+			"currency": inv.Currency, "payment_provider": "stripe",
+		})
+	}
+
 	slog.Info("stripe order: ledger entry recorded",
 		"order_number", order.OrderNumber, "session_id", sessionID,
 		"email", email, "total", total, "currency", currency,

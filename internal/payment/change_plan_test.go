@@ -401,7 +401,7 @@ func (f *planChangeFixture) reloadLicense(t *testing.T) *model.License {
 // planChangeAudits collects one kind of audit line on the licence.
 func (f *planChangeFixture) planChangeAudits(t *testing.T, action string) []map[string]any {
 	t.Helper()
-	logs, _, err := f.s.ListAuditLogs(f.ctx, "license", f.lic.ID, "", 0, 100)
+	logs, _, err := f.s.ListAuditLogs(f.ctx, "license", f.lic.ID, "", 0, 100, store.Sort{})
 	if err != nil {
 		t.Fatalf("audit logs: %v", err)
 	}

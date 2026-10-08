@@ -64,7 +64,7 @@ func TestUserNotificationsListQueryShape(t *testing.T) {
 	db := bun.NewDB(nil, pgdialect.New())
 
 	var dest []*model.UserNotification
-	raw, err := userNotificationsListQuery(db, "u-1", true, &dest).AppendQuery(db.QueryGen(), nil)
+	raw, err := userNotificationsListQuery(db, "u-1", true, Sort{}, &dest).AppendQuery(db.QueryGen(), nil)
 	if err != nil {
 		t.Fatalf("build query: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestUserNotificationsListQueryShape(t *testing.T) {
 	}
 
 	dest = nil
-	raw, err = userNotificationsListQuery(db, "u-1", false, &dest).AppendQuery(db.QueryGen(), nil)
+	raw, err = userNotificationsListQuery(db, "u-1", false, Sort{}, &dest).AppendQuery(db.QueryGen(), nil)
 	if err != nil {
 		t.Fatalf("build query: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestUserNotificationsOwnership(t *testing.T) {
 	}
 
 	// List: only the owner's rows are visible.
-	rows, total, err := s.ListUserNotifications(ctx, alice.ID, false, Page{Limit: 50})
+	rows, total, err := s.ListUserNotifications(ctx, alice.ID, false, Page{Limit: 50}, Sort{})
 	if err != nil || total != 1 || len(rows) != 1 {
 		t.Fatalf("ListUserNotifications(alice) = %d rows, total %d, %v; want 1, 1, nil", len(rows), total, err)
 	}
@@ -222,7 +222,7 @@ func TestUserNotificationsUnreadOnly(t *testing.T) {
 	if n, err := s.CountUnread(ctx, alice.ID); err != nil || n != 2 {
 		t.Fatalf("CountUnread = %d, %v; want 2, nil", n, err)
 	}
-	rows, total, err := s.ListUserNotifications(ctx, alice.ID, true, Page{Limit: 50})
+	rows, total, err := s.ListUserNotifications(ctx, alice.ID, true, Page{Limit: 50}, Sort{})
 	if err != nil || total != 2 || len(rows) != 2 {
 		t.Fatalf("unread listing = %d rows, total %d, %v; want 2, 2, nil", len(rows), total, err)
 	}
@@ -257,7 +257,7 @@ func TestUserNotificationsListOrder(t *testing.T) {
 		}
 	}
 
-	rows, total, err := s.ListUserNotifications(ctx, alice.ID, false, Page{Limit: 10})
+	rows, total, err := s.ListUserNotifications(ctx, alice.ID, false, Page{Limit: 10}, Sort{})
 	if err != nil || total != 2 {
 		t.Fatalf("list = total %d, %v; want 2, nil", total, err)
 	}

@@ -29,9 +29,25 @@ func NewCouponAdminHandler(s *store.Store) *CouponAdminHandler {
 	return &CouponAdminHandler{Store: s}
 }
 
+// couponSortColumns is what ?sort= accepts on the promotion-code
+// list: the columns the table shows. The expressions are qualified
+// with the bun model alias ("coupon"); "expires_at" is the ends_at
+// column — the moment the code stops redeeming — and "redemptions"
+// is the counter. Unknown keys keep the default ordering, newest
+// first (listSortOrDefault).
+var couponSortColumns = map[string]sortCol{
+	"created_at":  {Expr: "coupon.created_at", Desc: true},
+	"code":        {Expr: "coupon.code"},
+	"type":        {Expr: "coupon.type"},
+	"expires_at":  {Expr: "coupon.ends_at"},
+	"redemptions": {Expr: "coupon.times_redeemed", Desc: true},
+	"active":      {Expr: "coupon.is_active", Desc: true},
+}
+
 func (h *CouponAdminHandler) List(c *gin.Context) {
 	page := listPage(c)
-	coupons, total, err := h.Store.ListCoupons(c, c.Query("search"), page)
+	order := listSortOrDefault(c, couponSortColumns, "created_at")
+	coupons, total, err := h.Store.ListCoupons(c, c.Query("search"), page, order)
 	if err != nil {
 		response.Internal(c, err)
 		return

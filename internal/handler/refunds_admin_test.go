@@ -24,13 +24,14 @@ import (
 // internal/payment tests).
 
 type fakeRefundsAdminStore struct {
-	orders  map[string]*model.Order
-	refunds map[int64]*model.Refund
-	nextID  int64
-	slots   map[string]*store.IdempotencyRecord
-	done    map[int64]bool
-	audits  []*model.AuditLog
-	revokes []string
+	orders   map[string]*model.Order
+	refunds  map[int64]*model.Refund
+	nextID   int64
+	slots    map[string]*store.IdempotencyRecord
+	done     map[int64]bool
+	audits   []*model.AuditLog
+	revokes  []string
+	lastSort store.Sort
 }
 
 func newFakeRefundsAdminStore() *fakeRefundsAdminStore {
@@ -179,7 +180,8 @@ func (f *fakeRefundsAdminStore) Audit(_ context.Context, log *model.AuditLog) {
 	f.audits = append(f.audits, log)
 }
 
-func (f *fakeRefundsAdminStore) ListRefundsByOrder(_ context.Context, orderID string) ([]*model.Refund, error) {
+func (f *fakeRefundsAdminStore) ListRefundsByOrder(_ context.Context, orderID string, sort store.Sort) ([]*model.Refund, error) {
+	f.lastSort = sort
 	var out []*model.Refund
 	for _, r := range f.refunds {
 		if r.OrderID == orderID {

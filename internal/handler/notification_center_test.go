@@ -29,10 +29,12 @@ type fakeNotificationCenterStore struct {
 	markAllN           int
 	lastListUser       string
 	lastListUnreadOnly bool
+	lastSort           store.Sort
 	markCalls          [][2]string // (id, userID) pairs MarkRead was asked about
 }
 
-func (f *fakeNotificationCenterStore) ListUserNotifications(_ context.Context, userID string, unreadOnly bool, p store.Page) ([]*model.UserNotification, int, error) {
+func (f *fakeNotificationCenterStore) ListUserNotifications(_ context.Context, userID string, unreadOnly bool, p store.Page, sort store.Sort) ([]*model.UserNotification, int, error) {
+	f.lastSort = sort
 	f.lastListUser, f.lastListUnreadOnly = userID, unreadOnly
 	if f.listErr != nil {
 		return nil, 0, f.listErr

@@ -1803,6 +1803,31 @@ func (h *StripeHandler) endLicenseFromSubscription(ctx context.Context, lic *mod
 	return true
 }
 
+// dispatchRenewalIfExtended reports a subscription renewal (plan §35)
+// when the licence's access actually moved forward: the write that
+// applied the paid invoice pushed ValidUntil past where it stood
+// before. That comparison is the dedup too — a redelivered event
+// re-reads the licence with the new date already in place, applies
+// the same state again, moves nothing and so sends nothing.
+// Best-effort: the licence is already written and nothing waits on a
+// receiver being up.
+func (h *StripeHandler) dispatchRenewalIfExtended(ctx context.Context, lic *model.License, prevUntil *time.Time, kind string, extra map[string]any) {
+	if h.WebhookSvc == nil || lic == nil {
+		return
+	}
+	if lic.ValidUntil == nil || prevUntil == nil || !lic.ValidUntil.After(*prevUntil) {
+		return
+	}
+	payload := map[string]any{
+		"license_id": lic.ID, "subscription_id": lic.StripeSubscriptionID,
+		"kind": kind, "valid_until": lic.ValidUntil.Format(time.RFC3339),
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	h.WebhookSvc.Dispatch(ctx, lic.ProductID, model.EventSubscriptionRenewed, payload)
+}
+
 func (h *StripeHandler) onInvoicePaid(ctx context.Context, raw json.RawMessage) error {
 	var data invoiceEvent
 	if json.Unmarshal(raw, &data) != nil || data.SubscriptionID() == "" {
@@ -1831,7 +1856,21 @@ func (h *StripeHandler) onInvoicePaid(ctx context.Context, raw json.RawMessage) 
 		return err
 	}
 	if cur != nil {
-		return h.syncFromCurrent(ctx, lic, cur, asOf, "invoice.paid")
+		// What the access date stands at now, to tell after the write
+		// whether this paid invoice actually bought more of it.
+		prevUntil := lic.ValidUntil
+		if err := h.syncFromCurrent(ctx, lic, cur, asOf, "invoice.paid"); err != nil {
+			return err
+		}
+		// subscription.renewed (plan §35), billing_cycle kind: a paid
+		// invoice whose applied state extended the access date — the
+		// charge carrying the subscription another period. The $0
+		// invoice that opens a trial pays for nothing and is not one.
+		if data.AmountPaid > 0 {
+			h.dispatchRenewalIfExtended(ctx, lic, prevUntil, "billing_cycle",
+				map[string]any{"amount_minor": data.AmountPaid})
+		}
+		return nil
 	}
 
 	// No current read (no API key, or Stripe answers 404): the invoice
@@ -1846,6 +1885,9 @@ func (h *StripeHandler) onInvoicePaid(ctx context.Context, raw json.RawMessage) 
 	if lic.PastDueAt != nil {
 		episode = lic.PastDueAt.Unix()
 	}
+	// What the access date stands at now — the before of the renewal
+	// check below.
+	prevUntil := lic.ValidUntil
 	// A payment extends access and never shortens it: a mid-cycle invoice
 	// must not pull the date in to the moment it was raised. Shortening
 	// is subscription.updated's and .deleted's to do, from Stripe's
@@ -1864,6 +1906,13 @@ func (h *StripeHandler) onInvoicePaid(ctx context.Context, raw json.RawMessage) 
 	}
 	if !h.applyLicenseFromSubscription(ctx, lic, "invoice.paid", nil, "valid_until", "status", "past_due_at", "suspended_at", "suspended_by") {
 		return nil
+	}
+
+	// subscription.renewed (plan §35), billing_cycle kind — same
+	// shape and the same self-dedup as the sync path above.
+	if data.AmountPaid > 0 {
+		h.dispatchRenewalIfExtended(ctx, lic, prevUntil, "billing_cycle",
+			map[string]any{"amount_minor": data.AmountPaid})
 	}
 
 	// Recovery notification — shares the dedup path with
@@ -2471,6 +2520,18 @@ func (h *StripeHandler) fulfillRenewal(ctx context.Context, metadata map[string]
 		action = "updates_renewal_refunded"
 	} else {
 		until = renewal.UpdatesUntil.Format(time.RFC3339)
+	}
+	// subscription.renewed (plan §35), updates_period kind: the
+	// customer bought more update time for a licence that already had
+	// some. Only the real grant — never the refunded-first ledger row
+	// — and once per session: the FindLicenseRenewalBySession gate and
+	// the claim keep a redelivery from ever reaching this line.
+	// Best-effort: the renewal is applied and audited regardless.
+	if !refundedFirst && h.WebhookSvc != nil {
+		h.WebhookSvc.Dispatch(ctx, lic.ProductID, model.EventSubscriptionRenewed, map[string]any{
+			"license_id": lic.ID, "kind": "updates_period", "days": days,
+			"updates_until": until, "session_id": sessionID,
+		})
 	}
 	h.Store.Audit(ctx, &model.AuditLog{
 		Entity: "license", EntityID: lic.ID, Action: action,

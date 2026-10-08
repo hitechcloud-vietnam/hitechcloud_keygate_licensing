@@ -150,10 +150,10 @@ func TestIsCustomerWebhookEvent(t *testing.T) {
 		t.Error("empty string is not an event")
 	}
 	// Every vocabulary entry validates, and the list is exactly the
-	// model.Event* set — the full dispatched vocabulary (19 events,
+	// model.Event* set — the full dispatched vocabulary (28 events,
 	// including the names some call sites still send as literals).
-	if len(CustomerWebhookEvents) != 19 {
-		t.Errorf("CustomerWebhookEvents has %d entries, want 19", len(CustomerWebhookEvents))
+	if len(CustomerWebhookEvents) != 28 {
+		t.Errorf("CustomerWebhookEvents has %d entries, want 28", len(CustomerWebhookEvents))
 	}
 	for _, name := range []string{
 		EventLicenseActivated,

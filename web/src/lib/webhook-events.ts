@@ -30,6 +30,18 @@ export const WEBHOOK_EVENTS = [
   "release.published",
   "release.yanked",
   "release.unyanked",
+  // Catalog + commerce + lifecycle events (plan §35): product CRUD,
+  // the invoice side of a paid order, order failure/refund, a
+  // subscription renewal and the usage alert threshold.
+  "product.created",
+  "product.updated",
+  "product.deleted",
+  "order.failed",
+  "order.refunded",
+  "invoice.paid",
+  "invoice.voided",
+  "subscription.renewed",
+  "usage.threshold_reached",
 ] as const
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number]

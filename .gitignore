@@ -44,7 +44,9 @@ tests/
 *.test
 *.out
 coverage.html
-seed
+# Root-only: a stray `seed` build artifact — NOT the scripts/seed
+# source tree (tracked on purpose).
+/seed
 
 # Stray build output from `go build ./cmd/server` without -o
 /server

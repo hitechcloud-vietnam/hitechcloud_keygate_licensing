@@ -441,6 +441,21 @@ func (h *ReleaseAdminHandler) Delete(c *gin.Context) {
 
 // ─── List / Get ───
 
+// releaseSortColumns is what ?sort= accepts on the release list: the
+// columns the release table shows, qualified with the bun model alias
+// ("release"). "published_at" sorts by the moment the release went
+// out (draft rows have none and drift to the end under NULLS LAST),
+// and "version" is the raw column — dotted versions sort as text,
+// which is the version the row carries. Unknown keys keep the
+// default ordering, newest first (listSortOrDefault).
+var releaseSortColumns = map[string]sortCol{
+	"created_at":   {Expr: "release.created_at", Desc: true},
+	"version":      {Expr: "release.version"},
+	"published_at": {Expr: "release.published_at", Desc: true},
+	"status":       {Expr: "release.status"},
+	"channel":      {Expr: "release.channel"},
+}
+
 // GET /api/v1/admin/releases
 func (h *ReleaseAdminHandler) List(c *gin.Context) {
 	// Same window every admin list takes, and the same clamp: see
@@ -484,6 +499,7 @@ func (h *ReleaseAdminHandler) List(c *gin.Context) {
 		Status:    status,
 		Limit:     page.Limit,
 		Offset:    page.Offset,
+		Sort:      listSortOrDefault(c, releaseSortColumns, "created_at"),
 	}
 
 	releases, err := h.store.ListReleases(c.Request.Context(), filter)

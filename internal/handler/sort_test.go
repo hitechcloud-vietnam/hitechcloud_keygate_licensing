@@ -183,3 +183,109 @@ func TestListSortRefusalDoesNotEchoTheWholeQuery(t *testing.T) {
 		}
 	}
 }
+
+// The lenient twin: the §70 admin ledger lists treat ?sort= as a
+// nicety, not a contract. An unknown sorter — a hand-written script, a
+// client clearing its own state — must still get its rows, in the
+// order the endpoint always answered in. What does NOT relax is the
+// security boundary: only an allowlisted expression can reach the
+// ORDER BY, and an unknown name resolves to the default column
+// rather than to whatever was sent.
+func TestListSortOrDefault(t *testing.T) {
+	for _, tc := range []struct {
+		query    string
+		wantExpr string
+		wantDesc bool
+	}{
+		// Nothing asked for: the endpoint's default, in the direction
+		// that column reads in.
+		{"", "license.created_at", true},
+		{"?sort=", "license.created_at", true},
+		{"?sort=created_at", "license.created_at", true},
+		// A named column, both directions.
+		{"?sort=email", "license.email", false},
+		{"?sort=email&order=asc", "license.email", false},
+		{"?sort=email&order=desc", "license.email", true},
+		{"?sort=created_at&order=asc", "license.created_at", false},
+		// Unknown column: today's default ordering, not a 400.
+		{"?sort=nope", "license.created_at", true},
+		{"?sort=license.created_at", "license.created_at", true},
+		{"?sort=" + url.QueryEscape("email; DROP TABLE licenses"), "license.created_at", true},
+		// ...and ?order= still applies to whatever column resolved.
+		{"?sort=nope&order=asc", "license.created_at", false},
+		// A malformed ?order= is not a direction the contract names:
+		// it takes descending, never the caller's spelling. "ASC" is
+		// malformed exactly as it is for the strict listSort.
+		{"?sort=email&order=bogus", "license.email", true},
+		{"?sort=email&order=ASC", "license.email", true},
+		{"?sort=email&order=" + url.QueryEscape("asc; DELETE FROM licenses"), "license.email", true},
+	} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/admin/orders"+tc.query, nil)
+		got := listSortOrDefault(c, testSortColumns, "created_at")
+		if got.Expr != tc.wantExpr || got.Desc != tc.wantDesc {
+			t.Errorf("listSortOrDefault(%q) = {Expr:%q Desc:%v}, want {Expr:%q Desc:%v}",
+				tc.query, got.Expr, got.Desc, tc.wantExpr, tc.wantDesc)
+		}
+	}
+}
+
+// Lenient means silent: no error envelope, no status of its own. The
+// list that called this answers 200 with rows whatever the caller
+// sent in ?sort= and ?order=.
+func TestListSortOrDefaultWritesNothing(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/admin/orders?sort=nope&order=nope", nil)
+	listSortOrDefault(c, testSortColumns, "created_at")
+	if w.Code != 200 {
+		t.Errorf("status = %d, want the untouched 200", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("listSortOrDefault wrote %d bytes; it must not answer at all", w.Body.Len())
+	}
+}
+
+// Every §70 allowlist, under the same rule the license list is held
+// to: qualified expressions only (a quoted alias for a reserved-word
+// table counts as qualified — "order".created_at carries its own
+// qualifier inside the quotes), each map naming its own default. The
+// character set is widened by the quote for the reserved-word
+// aliases; anything else in an expression is still a bug.
+func TestAdminSortColumnMapsAreQualified(t *testing.T) {
+	maps := map[string]map[string]sortCol{
+		"products":      productSortColumns,
+		"users":         userSortColumns,
+		"audit_logs":    auditSortColumns,
+		"orders":        orderSortColumns,
+		"invoices":      invoiceSortColumns,
+		"coupons":       couponSortColumns,
+		"releases":      releaseSortColumns,
+		"notifications": notificationSortColumns,
+		"refunds":       refundSortColumns,
+	}
+	for res, m := range maps {
+		if len(m) == 0 {
+			t.Errorf("%s has no sortable columns declared", res)
+			continue
+		}
+		if _, ok := m["created_at"]; !ok {
+			t.Errorf("%s allowlist does not name its own default column created_at", res)
+		}
+		for name, col := range m {
+			if col.Expr == "" {
+				t.Errorf("%s sort column %q has no expression", res, name)
+			}
+			if !strings.Contains(col.Expr, ".") {
+				t.Errorf("%s sort column %q resolves to %q, which is not table-qualified", res, name, col.Expr)
+			}
+			for _, r := range col.Expr {
+				if r != '.' && r != '_' && r != '(' && r != ')' && r != '"' &&
+					!(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') {
+					t.Errorf("%s sort column %q expression %q contains unexpected character %q", res, name, col.Expr, r)
+				}
+			}
+		}
+	}
+}

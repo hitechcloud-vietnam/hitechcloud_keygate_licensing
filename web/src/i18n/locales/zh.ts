@@ -46,6 +46,7 @@ const zh = {
   "common.no": "否",
   "common.unlimited": "无限",
   "common.unlimitedSymbol": "∞",
+  "common.sortBy": "排序方式",
 
   // Nav
   "nav.dashboard": "仪表盘",
@@ -596,6 +597,7 @@ const zh = {
   "status.pending": "待处理",
   "status.delivered": "已投递",
   "status.failed": "失败",
+  "status.succeeded": "成功",
   "status.paused": "已暂停",
 
   // Webhooks extras
@@ -684,6 +686,20 @@ const zh = {
   "customers.provider": "提供商",
   "customers.periodRange": "周期",
   "customers.cancelAtEnd": "到期取消",
+
+  // 管理员隐私操作（plan §82）：导出与匿名化用户。
+  "customers.exportAction": "导出数据",
+  "customers.exportDone": "导出文件已下载。",
+  "customers.anonymizeAction": "匿名化",
+  "customers.anonymizeTitle": "要将该用户匿名化吗？",
+  "customers.anonymizeDesc":
+    "用户的个人身份信息将被抹除，所有凭据将被吊销。订单、发票、退款、许可证和审计日志将因法律和会计原因予以保留。",
+  "customers.anonymizeConfirm": "匿名化",
+  "customers.anonymizeDone": "用户已匿名化。",
+  "customers.anonymizeResultTitle": "匿名化结果",
+  "customers.anonymizeResultEmail": "新邮箱",
+  "customers.anonymizeResultRetained": "保留的记录",
+  "customers.anonymizeResultNote": "说明",
 
   // Licenses refund
   "licenses.refund": "退款",
@@ -1024,6 +1040,11 @@ const zh = {
   "orders.issuedAt": "开具时间",
   "orders.dueAt": "到期时间",
   "orders.invoicesEmpty": "该订单没有发票。",
+  "orders.invoiceNumber": "发票编号",
+  "orders.refunds": "退款",
+  "orders.refundsEmpty": "该订单尚无退款记录。",
+  "orders.refundAmount": "金额",
+  "orders.refundReason": "原因",
   "orders.refund": "退款",
   "orders.refundTitle": "为该订单退款？",
   "orders.refundDesc": "订单将标记为已退款并记录退款时间。支付时间和金额将保留为交易记录。",
@@ -1674,6 +1695,18 @@ const zh = {
   "notifications.events.release.published": "新版本已发布",
   "notifications.events.release.yanked": "版本已撤下",
   "notifications.events.release.unyanked": "版本已恢复",
+  "notifications.events.product.created": "产品已创建",
+  "notifications.events.product.updated": "产品已更新",
+  "notifications.events.product.deleted": "产品已删除",
+  "notifications.events.order.failed": "订单失败",
+  "notifications.events.order.refunded": "订单已退款",
+  "notifications.events.invoice.paid": "发票已支付",
+  "notifications.events.invoice.voided": "发票已作废",
+  "notifications.events.subscription.renewed": "订阅已续订",
+  "notifications.events.usage.threshold_reached": "使用量已达阈值",
+  "notifications.colEvent": "事件",
+  "notifications.colPriority": "优先级",
+  "notifications.colRead": "已读",
 
   // RBAC（plan §8）——自定义角色与权限。
   "rbac.title": "角色与权限",
@@ -1849,6 +1882,28 @@ const zh = {
   "surfaces.customerPortal": "客户门户",
   "surfaces.merchantPortal": "合作伙伴门户",
   "surfaces.marketplace": "应用市场",
+  // Privacy & data (plan §82)
+  "privacy.nav": "隐私与数据",
+  "privacy.title": "隐私与数据",
+  "privacy.desc": "下载平台保存的关于您的全部数据副本，或删除您的账户。",
+  "privacy.exportTitle": "导出我的数据",
+  "privacy.exportDesc":
+    "下载一个 JSON 文件，包含个人资料、席位与邀请、许可证、订单、发票、订阅、通知、API 密钥元数据和推广数据。API 密钥与 webhook 的机密永远不会包含在内；许可证密钥会包含，因为那是您自己的凭据。",
+  "privacy.exportButton": "下载我的数据（JSON）",
+  "privacy.exportDone": "您的数据导出文件已下载。",
+  "privacy.deleteTitle": "删除我的账户",
+  "privacy.deleteDesc": "此操作会从平台中抹去您的身份并吊销所有凭据，且无法撤销。",
+  "privacy.deleteErased":
+    "将被删除并吊销：您的邮箱、姓名和头像，所有会话与刷新令牌、API 密钥、关联登录、待验证代码和通知。",
+  "privacy.deleteRetained": "将被保留：订单、发票、退款、许可证和审计日志——出于法律、税务和会计原因。",
+  "privacy.deleteConfirmLabel": "输入您的邮箱以确认",
+  "privacy.deleteConfirmHint": "当此处内容与您的账户邮箱完全一致时，删除按钮才会解锁。",
+  "privacy.deleteButton": "删除我的账户",
+  "privacy.deleteDialogTitle": "确定删除您的账户？",
+  "privacy.deleteDialogBody":
+    "您的账户将立即被匿名化，所有凭据将被吊销。订单、发票和许可证将出于法律和会计原因保留。此操作无法撤销。",
+  "privacy.deleteDialogConfirm": "是的，删除我的账户",
+  "privacy.deleted": "您的账户已删除。正在为您登出……",
 } as const
 
 export default zh

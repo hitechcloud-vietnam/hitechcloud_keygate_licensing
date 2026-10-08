@@ -41,8 +41,12 @@ type ReleaseFilter struct {
 	ProductID string
 	Channel   string
 	Status    string
-	Limit     int
-	Offset    int
+	// Sort is the validated ordering the caller asked for. The zero
+	// value keeps the listing's own default, newest first — the same
+	// order the public feeds and the admin list have always read in.
+	Sort   Sort
+	Limit  int
+	Offset int
 }
 
 // MaxFeedListLimit caps how many published rows the store will return to
@@ -216,13 +220,18 @@ func (s *Store) ListReleases(ctx context.Context, f ReleaseFilter) ([]*model.Rel
 	}
 	offset := max(f.Offset, 0)
 
+	sort := f.Sort
+	if sort.Expr == "" {
+		sort = Sort{Expr: "release.created_at", Desc: true}
+	}
+
 	var out []*model.Release
 	q := s.DB.NewSelect().Model(&out).
 		Relation("Product").
 		Relation("Artifacts").
 		Limit(limit).
-		Offset(offset).
-		OrderExpr("release.created_at DESC, release.id DESC")
+		Offset(offset)
+	q = applySort(q, sort, "release.id")
 
 	q = applyReleaseFilters(q, f)
 

@@ -37,11 +37,11 @@ import (
 // refusal paths — invalid billing input, illegal invoice transitions —
 // run without a database.
 type orderAdminStore interface {
-	ListOrders(ctx context.Context, search, status string, p store.Page) ([]*model.Order, int, error)
+	ListOrders(ctx context.Context, search, status string, p store.Page, sort store.Sort) ([]*model.Order, int, error)
 	FindOrderByID(ctx context.Context, id string) (*model.Order, error)
 	UpdateOrderStatus(ctx context.Context, id, status string, paidAt, refundedAt *time.Time) error
 	UpdateOrderBilling(ctx context.Context, id string, o *model.Order) error
-	ListInvoicesByOrder(ctx context.Context, orderID string) ([]*model.Invoice, error)
+	ListInvoicesByOrder(ctx context.Context, orderID string, sort store.Sort) ([]*model.Invoice, error)
 	FindInvoiceByID(ctx context.Context, id string) (*model.Invoice, error)
 	UpdateInvoiceStatus(ctx context.Context, id, status string, voidedAt, uncollectibleAt *time.Time) error
 	Audit(ctx context.Context, log *model.AuditLog)
@@ -52,12 +52,51 @@ var _ orderAdminStore = (*store.Store)(nil)
 type OrderAdminHandler struct {
 	Svc   *service.OrderService
 	Store orderAdminStore
+	// Webhook dispatches the merchant order/invoice lifecycle events
+	// (order.refunded, invoice.voided). Optional and nil-guarded at
+	// every call site — exactly the AdminHandler.Webhook pattern — so
+	// a build without it loses the events and nothing else.
+	Webhook *service.WebhookService
+}
+
+// SetWebhook wires the merchant webhook dispatcher into this handler.
+func (h *OrderAdminHandler) SetWebhook(w *service.WebhookService) {
+	h.Webhook = w
+}
+
+// orderProductID is the product an order's lifecycle events fan out
+// to: the product of its first line item that names one. The merchant
+// webhook system is keyed per product and the ledger events ride the
+// product the sale was for; an order with no product line has nowhere
+// to send them and its events are skipped.
+func orderProductID(o *model.Order) string {
+	for _, it := range o.Items {
+		if it.ProductID != "" {
+			return it.ProductID
+		}
+	}
+	return ""
 }
 
 // NewOrderAdminHandler wires the handler. svc prices and persists
 // orders; s is the ledger for lookups and audit.
 func NewOrderAdminHandler(svc *service.OrderService, s *store.Store) *OrderAdminHandler {
 	return &OrderAdminHandler{Svc: svc, Store: s}
+}
+
+// orderSortColumns is what ?sort= accepts on the admin order ledger:
+// the columns the orders table actually shows. The expressions are
+// qualified with the bun model alias ("order" — a reserved word, so
+// quoted) and the map is the whole of the resolution: an unknown key
+// keeps the default ordering (listSortOrDefault), newest first.
+var orderSortColumns = map[string]sortCol{
+	"created_at":   {Expr: `"order".created_at`, Desc: true},
+	"order_number": {Expr: `"order".order_number`},
+	"customer":     {Expr: `lower("order".customer_email)`},
+	"status":       {Expr: `"order".status`},
+	"total":        {Expr: `"order".total_minor`, Desc: true},
+	"paid_at":      {Expr: `"order".paid_at`, Desc: true},
+	"updated_at":   {Expr: `"order".updated_at`, Desc: true},
 }
 
 // List answers GET /admin/orders.
@@ -71,7 +110,8 @@ func (h *OrderAdminHandler) List(c *gin.Context) {
 		response.BadRequest(c, "status must be pending, paid, failed, or refunded")
 		return
 	}
-	orders, total, err := h.Store.ListOrders(c, c.Query("search"), status, page)
+	order := listSortOrDefault(c, orderSortColumns, "created_at")
+	orders, total, err := h.Store.ListOrders(c, c.Query("search"), status, page, order)
 	if err != nil {
 		response.Internal(c, err)
 		return
@@ -87,7 +127,7 @@ func (h *OrderAdminHandler) Get(c *gin.Context) {
 		response.NotFound(c, "order not found")
 		return
 	}
-	invoices, err := h.Store.ListInvoicesByOrder(c, o.ID)
+	invoices, err := h.Store.ListInvoicesByOrder(c, o.ID, store.Sort{})
 	if err != nil {
 		response.Internal(c, err)
 		return
@@ -215,12 +255,38 @@ func (h *OrderAdminHandler) Refund(c *gin.Context) {
 		Entity: "order", EntityID: id, Action: "refunded",
 		ActorType: "admin", ActorID: adminID(c), IPAddress: c.ClientIP(),
 	})
+	// order.refunded (plan §35). This endpoint refunds the whole
+	// order — RefundedAt is stamped — so the order is refunded, in
+	// full and in one step. Best-effort: a receiver being down never
+	// fails the refund that already happened.
+	if h.Webhook != nil {
+		if pid := orderProductID(o); pid != "" {
+			h.Webhook.Dispatch(c, pid, model.EventOrderRefunded, map[string]any{
+				"order_id": o.ID, "order_number": o.OrderNumber,
+				"amount_minor": o.TotalMinor, "currency": o.Currency,
+				"reason": "admin_refund",
+			})
+		}
+	}
 	updated, err := h.Store.FindOrderByID(c, id)
 	if err != nil {
 		response.Internal(c, err)
 		return
 	}
 	response.OK(c, updated)
+}
+
+// invoiceSortColumns is what ?sort= accepts on the invoice list. The
+// default column reads oldest first (its natural direction is
+// ascending) — the order the documents were drawn in, which is how
+// the list has always answered. Unknown keys keep that ordering.
+var invoiceSortColumns = map[string]sortCol{
+	"created_at":     {Expr: "invoice.created_at"},
+	"invoice_number": {Expr: "invoice.invoice_number"},
+	"status":         {Expr: "invoice.status"},
+	"total":          {Expr: "invoice.total_minor", Desc: true},
+	"paid_at":        {Expr: "invoice.paid_at", Desc: true},
+	"due_at":         {Expr: "invoice.due_at"},
 }
 
 // ListInvoices answers GET /admin/orders/:id/invoices (and
@@ -235,7 +301,8 @@ func (h *OrderAdminHandler) ListInvoices(c *gin.Context) {
 		response.BadRequest(c, "order id is required")
 		return
 	}
-	invoices, err := h.Store.ListInvoicesByOrder(c, orderID)
+	order := listSortOrDefault(c, invoiceSortColumns, "created_at")
+	invoices, err := h.Store.ListInvoicesByOrder(c, orderID, order)
 	if err != nil {
 		response.Internal(c, err)
 		return
@@ -476,6 +543,20 @@ func (h *OrderAdminHandler) Void(c *gin.Context) {
 		Entity: "invoice", EntityID: inv.ID, Action: "voided",
 		ActorType: "admin", ActorID: adminID(c), IPAddress: c.ClientIP(),
 	})
+	// invoice.voided (plan §35). The transition guards above mean this
+	// fires once per invoice — void is terminal — and only on the real
+	// transition. Best-effort: the void already happened.
+	if h.Webhook != nil {
+		if o, err := h.Store.FindOrderByID(c, inv.OrderID); err == nil {
+			if pid := orderProductID(o); pid != "" {
+				h.Webhook.Dispatch(c, pid, model.EventInvoiceVoided, map[string]any{
+					"invoice_id": inv.ID, "order_id": inv.OrderID,
+					"invoice_number": inv.InvoiceNumber, "total_minor": inv.TotalMinor,
+					"currency": inv.Currency, "status": model.InvoiceStatusVoid,
+				})
+			}
+		}
+	}
 	updated, err := h.Store.FindInvoiceByID(c, inv.ID)
 	if err != nil {
 		response.Internal(c, err)

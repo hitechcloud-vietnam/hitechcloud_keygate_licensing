@@ -16,7 +16,9 @@ import {
   DataTableHeader,
   DataTablePagination,
   DataTableRow,
+  DataTableSortHead,
   useServerPagination,
+  useServerSort,
 } from "@/components/ui/data-table"
 import {
   Dialog,
@@ -43,10 +45,13 @@ export default function OrdersPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("")
   const [quoting, setQuoting] = useState(false)
-  const pg = useServerPagination(10, [search, statusFilter])
+  // Server-side column sorting (plan §70); the sort state joins the
+  // filters so a re-sort lands on the first page of the new order.
+  const srt = useServerSort("created_at", "desc")
+  const pg = useServerPagination(10, [search, statusFilter, srt.sort, srt.order])
   const { data, isLoading } = useQuery({
-    queryKey: ["admin", "orders", search, statusFilter, pg.page, pg.pageSize],
-    queryFn: () => admin.listOrders({ search, status: statusFilter || undefined, ...pg.params }),
+    queryKey: ["admin", "orders", search, statusFilter, srt.sort, srt.order, pg.page, pg.pageSize],
+    queryFn: () => admin.listOrders({ search, status: statusFilter || undefined, ...srt.params, ...pg.params }),
   })
 
   const { items: orders, total, totalPages } = pg.from(data, data?.orders)
@@ -134,12 +139,22 @@ export default function OrdersPage() {
               <DataTable>
                 <DataTableHeader>
                   <DataTableRow>
-                    <DataTableHead>{t("orders.orderNumber")}</DataTableHead>
-                    <DataTableHead>{t("orders.customer")}</DataTableHead>
-                    <DataTableHead>{t("common.status")}</DataTableHead>
-                    <DataTableHead>{t("orders.colTotal")}</DataTableHead>
+                    <DataTableSortHead sort={srt} column="order_number" firstOrder="asc">
+                      {t("orders.orderNumber")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="customer" firstOrder="asc">
+                      {t("orders.customer")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="status" firstOrder="asc">
+                      {t("common.status")}
+                    </DataTableSortHead>
+                    <DataTableSortHead sort={srt} column="total" firstOrder="desc">
+                      {t("orders.colTotal")}
+                    </DataTableSortHead>
                     <DataTableHead>{t("orders.coupon")}</DataTableHead>
-                    <DataTableHead>{t("common.created")}</DataTableHead>
+                    <DataTableSortHead sort={srt} column="created_at" firstOrder="desc">
+                      {t("common.created")}
+                    </DataTableSortHead>
                     <DataTableHead className="w-24 text-right">{t("common.actions")}</DataTableHead>
                   </DataTableRow>
                 </DataTableHeader>
