@@ -5,6 +5,7 @@ import {
   CreditCard,
   Download,
   FileKey2,
+  FileText,
   Gauge,
   Handshake,
   Key,
@@ -21,6 +22,7 @@ import {
   Rocket,
   ScrollText,
   Settings,
+  ShieldCheck,
   ShoppingCart,
   Star,
   Store,
@@ -33,6 +35,7 @@ import { useState } from "react"
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { LanguageSwitcher } from "@/components/language-switcher"
+import { NotificationBell } from "@/components/notification-bell"
 import { ServiceUnavailableScreen } from "@/components/service-unavailable"
 import { Button } from "@/components/ui/button"
 import {
@@ -104,8 +107,13 @@ export function AdminLayout() {
       label: t("nav.insights"),
       items: [
         { to: "/admin/analytics", label: t("nav.analytics"), icon: BarChart3 },
+        { to: "/admin/reports", label: t("nav.reports"), icon: FileText },
         { to: "/admin/audit", label: t("nav.audit"), icon: ScrollText },
       ],
+    },
+    {
+      label: t("nav.administration"),
+      items: [{ to: "/admin/rbac", label: t("nav.rolesAccess"), icon: ShieldCheck }],
     },
   ]
   const location = useLocation()
@@ -192,6 +200,7 @@ export function AdminLayout() {
       {/* Language choice beside the user menu: a preference that
         belongs to whoever is signed in, one tap away from their name. */}
       <div className="p-3 flex items-center gap-2">
+        <NotificationBell />
         <LanguageSwitcher iconOnly />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -271,6 +280,7 @@ export function AdminLayout() {
           <span className="min-w-0 flex-1 truncate font-semibold tracking-tight">
             {currentPage?.label ?? site_name}
           </span>
+          <NotificationBell />
           <LanguageSwitcher iconOnly />
         </header>
 
@@ -338,6 +348,7 @@ export function PortalLayout() {
             {site_name}
           </Link>
           <div className="flex items-center gap-4">
+            <NotificationBell />
             <Link to="/marketplace">
               <Button variant="ghost" size="sm" className="gap-2">
                 <Store className="h-4 w-4" />

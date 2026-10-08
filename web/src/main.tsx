@@ -25,7 +25,10 @@ import OrderDetailPage from "@/pages/admin/order-detail"
 import OrdersPage from "@/pages/admin/orders"
 import PlansPage from "@/pages/admin/plans"
 import ProductsPage from "@/pages/admin/products"
+import RBACRolesPage from "@/pages/admin/rbac"
+import RBACRoleDetailPage from "@/pages/admin/rbac-role"
 import ReleasesPage from "@/pages/admin/releases"
+import ReportsPage from "@/pages/admin/reports"
 import ResellerDetailPage from "@/pages/admin/reseller-detail"
 import ResellersPage from "@/pages/admin/resellers"
 import ReviewsPage from "@/pages/admin/reviews"
@@ -43,6 +46,7 @@ import PortalDashboardPage from "@/pages/portal/dashboard"
 import PortalDevicesPage from "@/pages/portal/devices"
 import PortalDownloadsPage from "@/pages/portal/downloads"
 import PortalLicensesPage from "@/pages/portal/licenses"
+import NotificationsPage from "@/pages/portal/notifications"
 import PortalOrdersPage from "@/pages/portal/orders"
 import PortalSubscriptionsPage from "@/pages/portal/subscriptions"
 import PortalSupportPage from "@/pages/portal/support"
@@ -114,6 +118,9 @@ createRoot(document.getElementById("root")!).render(
                       <Route path="affiliates" element={<AffiliatesPage />} />
                       <Route path="affiliates/:id" element={<AffiliateDetailPage />} />
                       <Route path="analytics" element={<AnalyticsPage />} />
+                      <Route path="reports" element={<ReportsPage />} />
+                      <Route path="rbac" element={<RBACRolesPage />} />
+                      <Route path="rbac/roles/:id" element={<RBACRoleDetailPage />} />
                       <Route path="audit" element={<AuditPage />} />
                       <Route path="customers" element={<CustomersPage />} />
                       <Route path="settings" element={<SettingsPage />} />
@@ -130,6 +137,7 @@ createRoot(document.getElementById("root")!).render(
                       <Route path="downloads" element={<PortalDownloadsPage />} />
                       <Route path="api-keys" element={<PortalAPIKeysPage />} />
                       <Route path="webhooks" element={<PortalWebhooksPage />} />
+                      <Route path="notifications" element={<NotificationsPage />} />
                       <Route path="support" element={<PortalSupportPage />} />
                       <Route path="account" element={<PortalAccountPage />} />
                     </Route>

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/events"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/store"
 )
@@ -88,6 +89,7 @@ func (c *ExpiryChecker) ExpireGracePeriodLicenses(ctx context.Context) {
 			c.webhook.Dispatch(ctx, lic.ProductID, "license.expired", map[string]any{
 				"license_id": lic.ID, "email": lic.Email, "reason": "grace_period_ended",
 			})
+			events.Emit(ctx, events.Event{Name: model.EventLicenseExpired, UserEmail: lic.Email, Link: "/portal/licenses", Priority: model.NotificationPriorityHigh, Data: map[string]any{"license_id": lic.ID, "email": lic.Email, "reason": "grace_period_ended"}})
 			productName := ""
 			if lic.Product != nil {
 				productName = lic.Product.Name
@@ -124,6 +126,7 @@ func (c *ExpiryChecker) ExpireTrials(ctx context.Context) {
 		c.webhook.Dispatch(ctx, lic.ProductID, "license.expired", map[string]any{
 			"license_id": lic.ID, "email": lic.Email, "reason": "trial_ended",
 		})
+		events.Emit(ctx, events.Event{Name: model.EventLicenseExpired, UserEmail: lic.Email, Link: "/portal/licenses", Priority: model.NotificationPriorityHigh, Data: map[string]any{"license_id": lic.ID, "email": lic.Email, "reason": "trial_ended"}})
 		productName := ""
 		if lic.Product != nil {
 			productName = lic.Product.Name

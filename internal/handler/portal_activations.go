@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/events"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/service"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/store"
@@ -170,6 +171,7 @@ func (h *PortalActivationsHandler) Delete(c *gin.Context) {
 			"license_id": lic.ID, "identifier": removed.Identifier,
 		})
 	}
+	events.Emit(c.Request.Context(), events.Event{Name: model.EventLicenseDeactivated, UserEmail: lic.Email, Link: "/portal/licenses", Data: map[string]any{"license_id": lic.ID, "identifier": removed.Identifier}})
 	response.OK(c, gin.H{"status": "deleted"})
 }
 

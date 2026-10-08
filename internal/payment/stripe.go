@@ -30,6 +30,7 @@ import (
 	"github.com/stripe/stripe-go/v82/webhook"
 
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/coupon"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/events"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/license"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/service"
@@ -2041,6 +2042,7 @@ func (h *StripeHandler) notifyPaymentRecovered(ctx context.Context, lic *model.L
 			"license_id": lic.ID, "email": lic.Email,
 		})
 	}
+	events.Emit(ctx, events.Event{Name: model.EventLicensePaymentRecovered, UserEmail: lic.Email, Link: "/portal/orders", Data: map[string]any{"license_id": lic.ID, "email": lic.Email}})
 }
 
 func (h *StripeHandler) onSubscriptionDeleted(ctx context.Context, raw json.RawMessage) {
@@ -2137,6 +2139,7 @@ func (h *StripeHandler) onPaymentFailed(ctx context.Context, raw json.RawMessage
 			"license_id": lic.ID, "email": lic.Email,
 		})
 	}
+	events.Emit(ctx, events.Event{Name: model.EventLicensePaymentFailed, UserEmail: lic.Email, Link: "/portal/orders", Priority: model.NotificationPriorityHigh, Data: map[string]any{"license_id": lic.ID, "email": lic.Email}})
 }
 
 func (h *StripeHandler) onChargeRefunded(ctx context.Context, raw json.RawMessage) error {

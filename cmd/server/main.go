@@ -29,6 +29,7 @@ import (
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/config"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/coupon"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/crypto"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/events"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/handler"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/license"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/middleware"
@@ -1256,6 +1257,14 @@ func main() {
 		portal.DELETE("/webhooks/:id", portalWebhookH.Delete)
 		portal.POST("/webhooks/:id/test", portalWebhookH.DispatchTest)
 
+		// Customer-facing event fan-out (plan §35/§44): every
+		// lifecycle event emitted at the call sites reaches the
+		// customer's registered webhooks AND the in-app inbox through
+		// the hub. Best-effort by design — the call sites keep their
+		// own merchant-webhook and email dispatch unchanged.
+		events.Register(events.NotificationSink(db))
+		events.Register(events.WebhookSink(portalWebhookH.DispatchCustomerEvent))
+
 		// Reseller self-service (Phase 7): a portal session whose email
 		// matches a reseller's contact_email IS that reseller; anyone
 		// else gets 404 (no partner-existence oracle).
@@ -1271,6 +1280,15 @@ func main() {
 		portal.POST("/products/:id/reviews", reviewPortalH.Create)
 		portal.PATCH("/products/:id/reviews", reviewPortalH.Update)
 		portal.DELETE("/products/:id/reviews", reviewPortalH.Delete)
+
+		// In-app notification center (plan §44/§88): the session
+		// user's own inbox. Ownership is scoped in the queries — one
+		// user can never list, count or stamp another user's rows.
+		notificationCenterH := handler.NewNotificationCenterHandler(db)
+		portal.GET("/notifications", notificationCenterH.List)
+		portal.GET("/notifications/unread-count", notificationCenterH.UnreadCount)
+		portal.POST("/notifications/:id/read", notificationCenterH.MarkRead)
+		portal.POST("/notifications/read-all", notificationCenterH.MarkAllRead)
 	}
 
 	// Admin route layout: three groups under /admin, all sharing the
@@ -1309,6 +1327,15 @@ func main() {
 	relWrite := v1.Group("/admin", relWriteMW...)
 	{
 		admin.GET("/stats", adminH.Stats)
+
+		// Business reporting (plan §43): read-only aggregations with
+		// CSV/JSON export. reports.read is the natural gate — finance
+		// and viewer bundles already carry it (see ExpandBuiltinRole).
+		reportsAdminH := handler.NewReportsAdminHandler(db)
+		reports := admin.Group("/reports", middleware.RequirePermission(model.PermReportsRead, db))
+		reports.GET("", reportsAdminH.List)
+		reports.GET("/:type", reportsAdminH.Get)
+		reports.GET("/:type/export", reportsAdminH.Export)
 
 		admin.GET("/products", adminH.ListProducts)
 		admin.GET("/products/:id", adminH.GetProduct)

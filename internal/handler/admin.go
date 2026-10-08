@@ -18,6 +18,7 @@ import (
 	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/uptrace/bun"
 
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/events"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/license"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/service"
@@ -2886,6 +2887,7 @@ func (h *AdminHandler) SetLicenseValidUntil(c *gin.Context) {
 			})
 		}
 	}
+	events.Emit(c, events.Event{Name: model.EventLicenseExpiryChanged, UserEmail: lic.Email, Link: "/portal/licenses", Data: map[string]any{"license_id": id, "email": lic.Email, "valid_until": req.ValidUntil}})
 	response.OK(c, lic)
 }
 
@@ -3139,6 +3141,7 @@ func (h *AdminHandler) DeleteActivation(c *gin.Context) {
 			"license_id": act.LicenseID, "identifier": act.Identifier,
 		})
 	}
+	events.Emit(c, events.Event{Name: model.EventLicenseDeactivated, UserEmail: licenseOwnerEmail(c, h.Store, act.LicenseID), Link: "/portal/licenses", Data: map[string]any{"license_id": act.LicenseID, "identifier": act.Identifier}})
 	response.NoContent(c)
 }
 

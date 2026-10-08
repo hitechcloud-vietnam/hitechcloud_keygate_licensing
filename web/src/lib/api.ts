@@ -329,6 +329,21 @@ export const portal = {
   updateProductReview: (productId: string, data: { title?: string; body?: string }) =>
     patch<Review>(`/portal/products/${encodeURIComponent(productId)}/reviews`, data),
   deleteProductReview: (productId: string) => del<void>(`/portal/products/${encodeURIComponent(productId)}/reviews`),
+
+  // ─── Notification center (plan §88) ───
+  // The signed-in account's in-app notifications. The human text is
+  // NOT in the payload: rows carry title_key — the event name — and
+  // the UI renders it through notifications.events.* (see
+  // components/notification-bell). :id/read and read-all are
+  // idempotent, so a click-through retry never fails.
+  listNotifications: (params?: { unread_only?: boolean; limit?: number; offset?: number }) =>
+    get<Paged<{ notifications: NotificationItem[]; unread_count: number }>>(
+      `/portal/notifications?${listQuery(params)}`,
+    ),
+  unreadNotifications: () => get<{ unread_count: number }>("/portal/notifications/unread-count"),
+  markNotificationRead: (id: string) =>
+    post<{ status?: string }>(`/portal/notifications/${encodeURIComponent(id)}/read`),
+  markAllNotificationsRead: () => post<{ status?: string; updated?: number }>("/portal/notifications/read-all"),
 }
 
 // ─── Admin ───
@@ -338,7 +353,7 @@ export const portal = {
 // Builds a list request's query string. Empty and undefined values
 // are left out so a filter that is not set does not become one that
 // matches the empty string.
-function listQuery(params?: Record<string, string | number | undefined>) {
+function listQuery(params?: Record<string, string | number | boolean | undefined>) {
   const q = new URLSearchParams()
   for (const [k, v] of Object.entries(params || {})) {
     if (v !== undefined && v !== "" && v !== null) q.set(k, String(v))
@@ -885,6 +900,72 @@ export const admin = {
   replyReview: (id: string, adminReply: string) =>
     put<Review>(`/admin/reviews/${encodeURIComponent(id)}/reply`, { admin_reply: adminReply }),
   deleteReview: (id: string) => del<void>(`/admin/reviews/${encodeURIComponent(id)}`),
+
+  // ─── Reports (plan §43) ───
+  // The reporting engine. The catalog names the report types and
+  // groupings the server serves; one run answers {series, totals}.
+  // Series rows carry `period` for time series — the resellers and
+  // affiliates reports answer with a ranked top list instead (no
+  // period). Metric keys are self-describing: *_count is an integer
+  // count, *_minor is integer minor-unit money (see lib/money).
+  listReportTypes: () => get<ReportCatalog>("/admin/reports"),
+  getReport: (type: string, params?: { from?: string; to?: string; group_by?: string }) =>
+    get<ReportData>(`/admin/reports/${encodeURIComponent(type)}?${listQuery(params)}`),
+  // Export is a file download, not a JSON envelope: fetch the body as
+  // a blob so the CSV keeps its exact bytes. Failures still surface as
+  // ApiError, so the §90 toasts behave like everywhere else.
+  exportReport: async (
+    type: string,
+    params: { from?: string; to?: string; group_by?: string; format: "csv" | "json" },
+  ) => {
+    const res = await fetch(`${BASE}/admin/reports/${encodeURIComponent(type)}/export?${listQuery(params)}`, {
+      credentials: "include",
+    })
+    if (!res.ok) {
+      const raw = await res.text()
+      let message = `Export failed (${res.status})`
+      let code = ""
+      try {
+        const json = JSON.parse(raw)
+        message = json?.error?.message || message
+        code = typeof json?.error?.code === "string" ? json.error.code : ""
+      } catch {
+        // non-JSON error body — keep the generic message
+      }
+      throw new ApiError(message, res.status, code, res.headers.get("X-Request-ID") || "")
+    }
+    return res.blob()
+  },
+
+  // ─── RBAC: custom roles & permissions (plan §8) ───
+  // System bundles (is_system) refuse rename / re-permission / delete
+  // with 409 SYSTEM_ROLE_PROTECTED; a role still held by users refuses
+  // delete with 409 ROLE_IN_USE; a name already taken — in any
+  // spelling — is 409 DUPLICATE. Assign / revoke are idempotent.
+  listPermissions: () => get<{ permissions: string[] }>("/admin/rbac/permissions"),
+  listRoles: (params?: { search?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ roles: Role[] }>>(`/admin/rbac/roles?${listQuery(params)}`),
+  getRole: (id: string) => get<Role>(`/admin/rbac/roles/${encodeURIComponent(id)}`),
+  createRole: (data: { name: string; description?: string; permissions?: string[] }) =>
+    post<Role>("/admin/rbac/roles", data),
+  updateRole: (id: string, data: { name?: string; description?: string; permissions?: string[] }) =>
+    patch<Role>(`/admin/rbac/roles/${encodeURIComponent(id)}`, data),
+  deleteRole: (id: string) => del<void>(`/admin/rbac/roles/${encodeURIComponent(id)}`),
+  setRolePermissions: (id: string, permissions: string[]) =>
+    put<Role>(`/admin/rbac/roles/${encodeURIComponent(id)}/permissions`, { permissions }),
+  listUserRoles: (userId: string) =>
+    get<{ roles: Role[]; total: number }>(`/admin/rbac/users/${encodeURIComponent(userId)}/roles`),
+  assignUserRole: (userId: string, roleId: string) =>
+    post<{ user_id: string; role_id: string }>(`/admin/rbac/users/${encodeURIComponent(userId)}/roles`, {
+      role_id: roleId,
+    }),
+  // Revoke reads role_id from a JSON body on DELETE — the one delete
+  // in this client that carries a body.
+  revokeUserRole: (userId: string, roleId: string) =>
+    request<void>(`/admin/rbac/users/${encodeURIComponent(userId)}/roles`, {
+      method: "DELETE",
+      body: JSON.stringify({ role_id: roleId }),
+    }),
 }
 
 // ─── Types ───
@@ -1914,4 +1995,61 @@ export interface MarketplaceProduct {
   website_url?: string | null
   repository_url?: string | null
   vendor?: string | null
+}
+
+// ─── Reports (plan §43) ───
+
+// The catalog: which report types the server serves and over which
+// groupings. Driven from the response so the picker never hardcodes
+// the list.
+export interface ReportCatalog {
+  report_types: string[]
+  group_by: string[]
+  default_group_by?: string
+  export_formats?: string[]
+}
+
+// One series row: `period` (absent on the resellers / affiliates top
+// lists) plus metric keys — *_count integers and *_minor money.
+export type ReportRow = Record<string, string | number | null>
+
+export interface ReportData {
+  // The engine echoes the run parameters beside the data.
+  report_type?: string
+  from?: string
+  to?: string
+  group_by?: string
+  series: ReportRow[]
+  totals: Record<string, number>
+}
+
+// ─── Notification center (plan §88) ───
+
+// title_key is the event name ("license.expiring"); `data` carries
+// the chips shown beside the title (order number, amounts in integer
+// minor units, …). priority is styled, not enumerated — an unknown
+// value renders as a plain row.
+export interface NotificationItem {
+  id: string
+  event: string
+  title_key: string
+  data: Record<string, unknown> | null
+  link: string | null
+  priority: string
+  read_at: string | null
+  created_at: string
+}
+
+// ─── RBAC (plan §8) ───
+
+// A custom role. The permission set is only present on the detail
+// payload (GET /admin/rbac/roles/:id) — list rows omit it.
+export interface Role {
+  id: string
+  name: string
+  description: string
+  is_system: boolean
+  permissions?: string[]
+  created_at: string
+  updated_at: string
 }

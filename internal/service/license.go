@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/branding"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/events"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/license"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/middleware"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
@@ -180,6 +181,7 @@ func (s *LicenseService) Activate(ctx context.Context, in ActivateInput) (*Activ
 			"license_id": lic.ID, "identifier": in.Identifier, "type": in.IdentifierType,
 		})
 	}
+	events.Emit(ctx, events.Event{Name: model.EventLicenseActivated, UserEmail: lic.Email, Link: "/portal/licenses", Data: map[string]any{"license_id": lic.ID, "identifier": in.Identifier, "type": in.IdentifierType}})
 
 	token, _, err := s.signToken(ctx, lic, in.Identifier)
 	if err != nil {
@@ -404,6 +406,7 @@ func (s *LicenseService) Deactivate(ctx context.Context, in DeactivateInput) err
 			"license_id": lic.ID, "identifier": in.Identifier,
 		})
 	}
+	events.Emit(ctx, events.Event{Name: model.EventLicenseDeactivated, UserEmail: lic.Email, Link: "/portal/licenses", Data: map[string]any{"license_id": lic.ID, "identifier": in.Identifier}})
 
 	return nil
 }
