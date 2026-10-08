@@ -46,7 +46,9 @@ import { formatDate } from "@/lib/utils"
 export default function ProductsPage() {
   const { t } = useI18n()
   const qc = useQueryClient()
-  const [search, setSearch] = useState("")
+  // ?search= pre-fills the box: global search (and the command
+  // palette) deep-link to this list narrowed to the hit they found.
+  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("search") || "")
   const pg = useServerPagination(10, [search])
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "products", search, pg.page, pg.pageSize],

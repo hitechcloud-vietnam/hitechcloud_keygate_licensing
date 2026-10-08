@@ -586,7 +586,9 @@ func TestPayOSNameAndEnabled(t *testing.T) {
 			t.Fatalf("partial credentials must NOT be enabled: %+v", cfg)
 		}
 	}
-	if !strings.HasSuffix(full.payosBaseURL, "https://x") {
-		t.Fatalf("BaseURL trailing slash must be trimmed: %q", full.payosBaseURL)
+	// BaseURL trailing slash must be trimmed on the resolved config
+	// (the provider is getter-based now, so there is no static field).
+	if got, err := full.payosConfig(context.Background()); err != nil || !strings.HasSuffix(got.BaseURL, "https://x") {
+		t.Fatalf("BaseURL trailing slash must be trimmed: %q (err=%v)", got.BaseURL, err)
 	}
 }

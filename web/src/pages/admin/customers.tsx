@@ -26,7 +26,9 @@ import { formatDate, statusColor } from "@/lib/utils"
 export default function CustomersPage() {
   const { t } = useI18n()
   const [page, setPage] = useState(0)
-  const [search, setSearch] = useState("")
+  // ?search= pre-fills the box: global search (and the command
+  // palette) deep-link to this list narrowed to the hit they found.
+  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("search") || "")
   const limit = 30
   const [viewingUser, setViewingUser] = useState<string | null>(null)
 

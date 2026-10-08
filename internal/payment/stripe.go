@@ -26,6 +26,7 @@ import (
 	stripeinvoice "github.com/stripe/stripe-go/v82/invoice"
 	"github.com/stripe/stripe-go/v82/invoicepayment"
 	stripeprice "github.com/stripe/stripe-go/v82/price"
+	striperefund "github.com/stripe/stripe-go/v82/refund"
 	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/stripe/stripe-go/v82/webhook"
 
@@ -3277,4 +3278,54 @@ func (h *StripeHandler) planForPrice(ctx context.Context, priceID string) (*mode
 		return nil, err
 	}
 	return plan, nil
+}
+
+// ─── Outbound refunds (plan §79) ───
+//
+// The admin refund flow (payment/refunds.go) refunds through this —
+// the one place an outbound Stripe refund is created. onChargeRefunded
+// above is the INBOUND half: what Stripe tells us after money moves
+// (including refunds made in the dashboard, which never pass through
+// here).
+
+// refundStripeReason maps the platform's free-text refund reason onto
+// Stripe's closed enum (duplicate | fraudulent |
+// requested_by_customer). Anything that is not a fraud claim is the
+// customer's request — the enum is Stripe's bookkeeping, our own
+// reason text stays on the refunds row untouched.
+func refundStripeReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "fraud", "chargeback":
+		return "fraudulent"
+	case "duplicate":
+		return "duplicate"
+	}
+	return "requested_by_customer"
+}
+
+// refundStripePaymentIntent refunds (part of) a settled payment
+// intent (plan §79). amountMinor is REQUIRED and int64 minor units —
+// the caller resolves "the rest of the order" to an amount first, so
+// no Stripe call ever carries a float or an implied total. Returns
+// the Stripe refund id (the provider_ref of the refunds row).
+func refundStripePaymentIntent(ctx context.Context, paymentIntentID string, amountMinor int64, reason string) (string, error) {
+	if strings.TrimSpace(paymentIntentID) == "" {
+		return "", errors.New("stripe refund: payment intent is required")
+	}
+	if amountMinor <= 0 {
+		return "", fmt.Errorf("stripe refund: amount must be positive, got %d", amountMinor)
+	}
+	rf, err := striperefund.New(&stripe.RefundParams{
+		PaymentIntent: stripe.String(paymentIntentID),
+		Amount:        stripe.Int64(amountMinor),
+		Reason:        stripe.String(refundStripeReason(reason)),
+		Params:        stripe.Params{Context: ctx},
+	})
+	if err != nil {
+		return "", err
+	}
+	if rf == nil {
+		return "", errors.New("stripe refund: empty response")
+	}
+	return rf.ID, nil
 }

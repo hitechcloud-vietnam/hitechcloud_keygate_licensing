@@ -1,13 +1,17 @@
 package handler
 
 import (
+	"context"
+	"database/sql"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/config"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/model"
 )
 
 // The Secure attribute has to follow the connection the browser
@@ -59,5 +63,100 @@ func TestSessionCookieSecureFollowsTheRequestScheme(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Session sharing across subdomains (SSO): the session and refresh
+// cookies roam the site's subdomains only when the session_cookie_domain
+// setting says so. Unset — or unreadable, or garbage no browser would
+// accept — must reproduce today's host-only cookies EXACTLY (a cookie
+// silently dropped for a malformed Domain is a login that answers 200
+// and a session that never sticks). The Domain is attached to both the
+// set and the clear: a host-only clear cannot delete a cookie stored
+// for .example.com.
+func TestSessionCookieDomainSetAndUnset(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name       string
+		setting    string
+		readErr    error
+		wantDomain string
+	}{
+		{"set: leading dot", ".example.com", nil, "example.com"}, // Go drops the legacy leading dot on the wire
+		{"set: bare domain", "example.com", nil, "example.com"},
+		{"set: case and padding", " .Example.COM ", nil, "example.com"},
+		{"unset: empty value", "", nil, ""},
+		{"unset: missing row", ".example.com", sql.ErrNoRows, ""},
+		{"unset: read failure", ".example.com", sql.ErrConnDone, ""},
+		{"unset: garbage value", "not a domain; drop=it", nil, ""},
+		{"unset: single label", "localhost", nil, ""},
+		{"unset: double dot", "a..example.com", nil, ""},
+		{"unset: trailing dot", "example.com.", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &AuthHandler{
+				Config: &config.Config{Environment: "development", BaseURL: "http://localhost:9000"},
+				surfGetSetting: func(_ context.Context, key string) (string, error) {
+					if key != surfCookieDomainSetting {
+						t.Errorf("read unexpected setting key %q", key)
+					}
+					return tc.setting, tc.readErr
+				},
+			}
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("POST", "http://customer.example.com/api/v1/auth/otp/verify", nil)
+
+			h.issueSessionCookie(c, &model.User{ID: "user_1", Email: "u@example.com", Name: "U"})
+			h.setRefreshCookie(c, "raw-refresh", time.Now().Add(time.Hour))
+
+			cookies := w.Header().Values("Set-Cookie")
+			if len(cookies) != 2 {
+				t.Fatalf("want session + refresh cookies, got %v", cookies)
+			}
+			for i, want := range []string{"Path=/;", "Path=/api/v1/auth/refresh;"} {
+				if !strings.Contains(cookies[i], want) {
+					t.Errorf("cookie %d lost %s: %s", i, want, cookies[i])
+				}
+			}
+			for _, ck := range cookies {
+				if tc.wantDomain == "" {
+					if strings.Contains(ck, "Domain=") {
+						t.Errorf("setting %q must stay host-only (no Domain): %s", tc.setting, ck)
+					}
+				} else if !strings.Contains(ck, "Domain="+tc.wantDomain) {
+					t.Errorf("setting %q: want Domain=%s: %s", tc.setting, tc.wantDomain, ck)
+				}
+				// Secure/HttpOnly/SameSite are not up for negotiation —
+				// the domain never changes them.
+				for _, want := range []string{"HttpOnly", "SameSite=Lax"} {
+					if !strings.Contains(ck, want) {
+						t.Errorf("cookie lost %s: %s", want, ck)
+					}
+				}
+			}
+		})
+	}
+}
+
+// Without the setting the cookie is byte-for-byte today's behavior:
+// no Domain attribute at all, even when the Store is not wired
+// (dev/tests) — the read is best-effort and fails open to host-only.
+func TestSessionCookieDomainWithoutSettingOrStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &AuthHandler{Config: &config.Config{Environment: "development", BaseURL: "http://localhost:9000"}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "http://customer.example.com/api/v1/auth/otp/verify", nil)
+
+	h.issueSessionCookie(c, &model.User{ID: "user_1", Email: "u@example.com", Name: "U"})
+	got := w.Header().Get("Set-Cookie")
+	if strings.Contains(got, "Domain=") {
+		t.Errorf("no Store/no setting must stay host-only: %s", got)
+	}
+	for _, want := range []string{"HttpOnly", "SameSite=Lax", "Path=/"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cookie lost %s: %s", want, got)
+		}
 	}
 }

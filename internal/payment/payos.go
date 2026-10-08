@@ -84,26 +84,46 @@ const (
 	payosCodeOK           = "00"
 )
 
-// PayOSProvider implements PaymentProvider for payOS (VietQR). Immutable
-// after construction — safe for concurrent use.
+// PayOSProvider implements PaymentProvider for payOS (VietQR).
+//
+// Credentials come from a getter resolved at call time (config-in-DB):
+// a rotated key takes effect without a restart. Safe for concurrent
+// use — every call works from its own snapshot.
 type PayOSProvider struct {
-	payosClientID    string
-	payosAPIKey      string
-	payosChecksumKey string
-	payosBaseURL     string
-	payosHTTPClient  *http.Client
+	payosCreds      func(context.Context) (config.PayOSConfig, error)
+	payosHTTPClient *http.Client
 }
 
-// NewPayOS builds a provider from PAYOS_* config. Credentials may be empty —
-// Enabled() reports whether the integration is actually available (§25).
+// NewPayOS builds a provider from PAYOS_* config — a thin wrapper over
+// a constant getter, so every boot-configured caller and test keeps
+// working unchanged. Credentials may be empty — Enabled() reports
+// whether the integration is actually available (§25).
 func NewPayOS(cfg config.PayOSConfig) *PayOSProvider {
+	return NewPayOSDynamic(func(context.Context) (config.PayOSConfig, error) { return cfg, nil })
+}
+
+// NewPayOSDynamic builds the provider with credentials read through
+// get at call time (e.g. service.ConfigService.PayOSGetter).
+func NewPayOSDynamic(get func(context.Context) (config.PayOSConfig, error)) *PayOSProvider {
 	return &PayOSProvider{
-		payosClientID:    cfg.ClientID,
-		payosAPIKey:      cfg.APIKey,
-		payosChecksumKey: cfg.ChecksumKey,
-		payosBaseURL:     strings.TrimRight(cfg.BaseURL, "/"),
-		payosHTTPClient:  &http.Client{Timeout: payosHTTPTimeout},
+		payosCreds:      get,
+		payosHTTPClient: &http.Client{Timeout: payosHTTPTimeout},
 	}
+}
+
+// payosConfig reads the credentials in effect right now. The base URL
+// is right-trimmed of "/" so the path joins below cannot double up.
+func (p *PayOSProvider) payosConfig(ctx context.Context) (config.PayOSConfig, error) {
+	cfg := config.PayOSConfig{}
+	if p != nil && p.payosCreds != nil {
+		c, err := p.payosCreds(ctx)
+		if err != nil {
+			return cfg, err
+		}
+		cfg = c
+	}
+	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+	return cfg, nil
 }
 
 // Name returns the stable provider id.
@@ -111,10 +131,13 @@ func (p *PayOSProvider) Name() string { return ProviderPayOS }
 
 // Enabled is all-or-nothing over the three required credentials.
 func (p *PayOSProvider) Enabled() bool {
-	return p != nil &&
-		p.payosClientID != "" &&
-		p.payosAPIKey != "" &&
-		p.payosChecksumKey != ""
+	ctx, cancel := cfgsvcCredsCtx()
+	defer cancel()
+	cfg, err := p.payosConfig(ctx)
+	if err != nil {
+		return false
+	}
+	return cfg.ClientID != "" && cfg.APIKey != "" && cfg.ChecksumKey != ""
 }
 
 // payosCreateItem is one line item on the payment link.
@@ -163,7 +186,11 @@ func (e payosAPIError) Error() string {
 // CreatePayment creates a payOS payment link and returns the redirect.
 // ProviderRef is the derived orderCode as a decimal string (see file comment).
 func (p *PayOSProvider) CreatePayment(ctx context.Context, req CreatePaymentRequest) (*CreatePaymentResult, error) {
-	if !p.Enabled() {
+	cfg, err := p.payosConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ClientID == "" || cfg.APIKey == "" || cfg.ChecksumKey == "" {
 		return nil, ErrProviderNotConfigured
 	}
 	if req.Currency != "" && !strings.EqualFold(req.Currency, "VND") {
@@ -205,7 +232,7 @@ func (p *PayOSProvider) CreatePayment(ctx context.Context, req CreatePaymentRequ
 	}
 
 	// Sign over EXACTLY the five canonical fields (docs-pinned order).
-	signature := payosSignCreate(p.payosChecksumKey, req.AmountMinor, orderCode, cancelURL, description, returnURL)
+	signature := payosSignCreate(cfg.ChecksumKey, req.AmountMinor, orderCode, cancelURL, description, returnURL)
 
 	body := payosCreateRequest{
 		OrderCode:   orderCode,
@@ -219,7 +246,7 @@ func (p *PayOSProvider) CreatePayment(ctx context.Context, req CreatePaymentRequ
 		ExpiredAt:   expiredAt,
 		Signature:   signature,
 	}
-	env, err := p.payosCall(ctx, http.MethodPost, payosCreatePath, body)
+	env, err := p.payosCall(ctx, cfg, http.MethodPost, payosCreatePath, body)
 	if err != nil {
 		return nil, err
 	}
@@ -264,13 +291,17 @@ func (p *PayOSProvider) RefundPayment(ctx context.Context, req RefundRequest) (*
 // VoidPayment cancels a not-yet-settled payment link. Idempotent: a link that
 // is already CANCELLED or EXPIRED counts as voided (nil).
 func (p *PayOSProvider) VoidPayment(ctx context.Context, ref, reason string) error {
-	if !p.Enabled() {
+	cfg, err := p.payosConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if cfg.ClientID == "" || cfg.APIKey == "" || cfg.ChecksumKey == "" {
 		return ErrProviderNotConfigured
 	}
 	if strings.TrimSpace(ref) == "" {
 		return fmt.Errorf("payos: payment reference is required")
 	}
-	env, err := p.payosCall(ctx, http.MethodPost,
+	env, err := p.payosCall(ctx, cfg, http.MethodPost,
 		payosCreatePath+"/"+url.PathEscape(ref)+"/cancel",
 		map[string]any{"cancellationReason": reason})
 	if err != nil {
@@ -290,13 +321,17 @@ func (p *PayOSProvider) VoidPayment(ctx context.Context, ref, reason string) err
 // GetPaymentStatus queries the authoritative payment-link state. ref may be
 // the decimal orderCode (what we hand out) or a payOS paymentLinkId.
 func (p *PayOSProvider) GetPaymentStatus(ctx context.Context, ref string) (*PaymentStatusResult, error) {
-	if !p.Enabled() {
+	cfg, err := p.payosConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ClientID == "" || cfg.APIKey == "" || cfg.ChecksumKey == "" {
 		return nil, ErrProviderNotConfigured
 	}
 	if strings.TrimSpace(ref) == "" {
 		return nil, fmt.Errorf("payos: payment reference is required")
 	}
-	env, err := p.payosCall(ctx, http.MethodGet, payosCreatePath+"/"+url.PathEscape(ref), nil)
+	env, err := p.payosCall(ctx, cfg, http.MethodGet, payosCreatePath+"/"+url.PathEscape(ref), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +381,13 @@ func (p *PayOSProvider) GetPaymentStatus(ctx context.Context, ref string) (*Paym
 // OrderID is always "": payOS does not echo our order id — the routing key is
 // ProviderRef (the decimal orderCode stored at CreatePayment time).
 func (p *PayOSProvider) VerifyWebhook(payload []byte) (*WebhookEvent, error) {
-	if p == nil || p.payosChecksumKey == "" {
+	credsCtx, cancel := cfgsvcCredsCtx()
+	defer cancel()
+	cfg, err := p.payosConfig(credsCtx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ChecksumKey == "" {
 		return nil, ErrProviderNotConfigured
 	}
 	env, err := payosParseEnvelope(payload)
@@ -359,7 +400,7 @@ func (p *PayOSProvider) VerifyWebhook(payload []byte) (*WebhookEvent, error) {
 	if env.Signature == "" {
 		return nil, ErrWebhookSignatureInvalid
 	}
-	want := payosSignData(p.payosChecksumKey, env.Data)
+	want := payosSignData(cfg.ChecksumKey, env.Data)
 	got := strings.ToLower(env.Signature)
 	if len(got) != len(want) || !hmac.Equal([]byte(got), []byte(want)) {
 		return nil, ErrWebhookSignatureInvalid
@@ -402,13 +443,17 @@ func (p *PayOSProvider) VerifyWebhook(payload []byte) (*WebhookEvent, error) {
 // at the URL first — the handler must ACK it (HTTP 2xx) even though the sample
 // orderCode matches no order. Extra method, not part of PaymentProvider.
 func (p *PayOSProvider) ConfirmWebhook(ctx context.Context, webhookURL string) error {
-	if !p.Enabled() {
+	cfg, err := p.payosConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if cfg.ClientID == "" || cfg.APIKey == "" || cfg.ChecksumKey == "" {
 		return ErrProviderNotConfigured
 	}
 	if strings.TrimSpace(webhookURL) == "" {
 		return fmt.Errorf("payos: webhook URL is required")
 	}
-	env, err := p.payosCall(ctx, http.MethodPost, payosConfirmWebhook, map[string]any{"webhookUrl": webhookURL})
+	env, err := p.payosCall(ctx, cfg, http.MethodPost, payosConfirmWebhook, map[string]any{"webhookUrl": webhookURL})
 	if err != nil {
 		return err
 	}
@@ -422,7 +467,9 @@ func (p *PayOSProvider) ConfirmWebhook(ctx context.Context, webhookURL string) e
 
 // payosCall performs an authenticated JSON request and decodes the envelope.
 // Every request carries x-client-id, x-api-key and Content-Type (docs).
-func (p *PayOSProvider) payosCall(ctx context.Context, method, path string, body any) (*payosEnvelope, error) {
+// cfg is the call's credential snapshot — the same one that signed the
+// request, so a mid-request rotation can never mix two credential sets.
+func (p *PayOSProvider) payosCall(ctx context.Context, cfg config.PayOSConfig, method, path string, body any) (*payosEnvelope, error) {
 	var reader io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -431,14 +478,18 @@ func (p *PayOSProvider) payosCall(ctx context.Context, method, path string, body
 		}
 		reader = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, p.payosBaseURL+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, cfg.BaseURL+path, reader)
 	if err != nil {
 		return nil, fmt.Errorf("payos: build request: %w", err)
 	}
-	req.Header.Set("x-client-id", p.payosClientID)
-	req.Header.Set("x-api-key", p.payosAPIKey)
+	req.Header.Set("x-client-id", cfg.ClientID)
+	req.Header.Set("x-api-key", cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.payosHTTPClient.Do(req)
+	client := p.payosHTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: payosHTTPTimeout}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("payos: %s %s: %w", method, path, err)
 	}

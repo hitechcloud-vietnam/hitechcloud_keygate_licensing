@@ -285,7 +285,29 @@ var ErrSecretEncryptionUnavailable = errors.New(
 var settingSecretKeys = map[string]bool{
 	"cloudflare_api_token": true,
 	"smtp_password":        true,
+
+	// Config catalog (internal/config/keys.go) secret entries. The
+	// catalog is the source of truth for which settings hold
+	// credentials; keys_test.go pins that every catalog key of type
+	// "secret" is registered here, so a new secret in the catalog can
+	// never be stored in the clear by accident.
+	"smtp.password":                 true,
+	"payment.stripe_secret_key":     true,
+	"payment.stripe_webhook_secret": true,
+	"payment.pay2s.secret_key":      true,
+	"payment.zalopay.key1":          true,
+	"payment.zalopay.callback_key":  true,
+	"payment.payos.api_key":         true,
+	"payment.payos.checksum_key":    true,
+	"storage.secret_key":            true,
 }
+
+// IsSecretSettingKey reports whether values for key are sealed at rest
+// and must never be returned by an API (see settingSecretKeys). The
+// config catalog tests use it to keep the catalog and this map in
+// sync; the admin config API uses the catalog's own type for the same
+// question.
+func IsSecretSettingKey(key string) bool { return settingSecretKeys[key] }
 
 const settingEncPrefix = "enc:v1:"
 

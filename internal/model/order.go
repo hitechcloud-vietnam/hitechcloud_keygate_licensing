@@ -22,6 +22,16 @@ const (
 	OrderStatusRefunded = "refunded"
 )
 
+// OrderStatusPartiallyRefunded is a paid order some (not all) of the
+// money has gone back for. It extends — never replaces — the four
+// above: the string lives in orders.status, so existing rows keep
+// scanning and the database CHECK was widened
+// (20261008_149000_refunds_currency), not rewritten. An order in this
+// state is still open business: it can be refunded further, up to its
+// total, and only when RefundedMinor reaches TotalMinor does it become
+// OrderStatusRefunded.
+const OrderStatusPartiallyRefunded = "partially_refunded"
+
 // Invoice status values.
 const (
 	InvoiceStatusDraft = "draft"
@@ -122,8 +132,19 @@ type Order struct {
 	IdempotencyKey string     `bun:",nullzero,unique" json:"idempotency_key,omitempty"`
 	PaidAt         *time.Time `json:"paid_at,omitempty"`
 	RefundedAt     *time.Time `json:"refunded_at,omitempty"`
-	CreatedAt      time.Time  `bun:",nullzero,default:now()" json:"created_at"`
-	UpdatedAt      time.Time  `bun:",nullzero,default:now()" json:"updated_at"`
+	// RefundedMinor accumulates the money actually returned by
+	// succeeded refunds (plan §79). int64 minor units, exactly like
+	// every other money column. The remaining refundable amount is
+	// TotalMinor − RefundedMinor; the sum is maintained at refund
+	// time so a new refund's cap is one column read, and historical
+	// totals are never recalculated. Zero on an order never refunded.
+	// RefundedAt is stamped only when the refund COMPLETES the order
+	// (RefundedMinor reaches TotalMinor) — a partial refund leaves it
+	// nil, so every existing "RefundedAt != nil means done" check
+	// keeps meaning exactly that.
+	RefundedMinor int64     `bun:",notnull,default:0" json:"refunded_minor,omitempty"`
+	CreatedAt     time.Time `bun:",nullzero,default:now()" json:"created_at"`
+	UpdatedAt     time.Time `bun:",nullzero,default:now()" json:"updated_at"`
 
 	// Billing block (purchase-order / invoice workflow): who the
 	// invoice is drawn for and the commercial references that travel

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -48,22 +49,99 @@ func (h *AuthHandler) requestIsHTTPS(c *gin.Context) bool {
 
 // setSecureCookie sets a cookie with SameSite=Lax for CSRF protection.
 // secure marks it HTTPS-only; see requestIsHTTPS for who may set it.
+// Host-only: no Domain attribute. The session and refresh cookies go
+// through surfSetCookieDomain so they can roam a site's subdomains;
+// everything else (e.g. the SSO state cookie) stays pinned to its host.
 func setSecureCookie(c *gin.Context, name, value string, maxAge int, path string, secure, httpOnly bool) {
+	surfSetCookieDomain(c, name, value, maxAge, path, secure, httpOnly, "")
+}
+
+// surfSetCookieDomain is setSecureCookie with an explicit Domain
+// attribute ("" = host-only). Secure, HttpOnly and SameSite=Lax are
+// not up for negotiation. A malformed Domain makes the browser drop
+// the WHOLE cookie, which is why surfCookieDomainValue vets the
+// setting before it ever gets here.
+func surfSetCookieDomain(c *gin.Context, name, value string, maxAge int, path string, secure, httpOnly bool, domain string) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     name,
 		Value:    value,
 		MaxAge:   maxAge,
 		Path:     path,
+		Domain:   domain,
 		Secure:   secure,
 		HttpOnly: httpOnly,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
+// surfCookieDomainSetting is the settings key that widens the session
+// cookies from one host to a whole site: ".example.com" (or
+// "example.com" — browsers read both as the same scope) logs a user in
+// on the apex and every subdomain that shares it. Unset keeps today's
+// host-only cookies exactly.
+const surfCookieDomainSetting = "session_cookie_domain"
+
+// surfReadCookieDomain reads the cookie domain through get. A missing
+// row is "not configured"; a read failure is "not now". Both answer
+// host-only — the cookies this install always set — rather than a
+// guess that could strand sessions across hosts.
+func surfReadCookieDomain(ctx context.Context, get func(context.Context, string) (string, error)) string {
+	raw, err := get(ctx, surfCookieDomainSetting)
+	if err != nil {
+		return ""
+	}
+	return surfCookieDomainValue(raw)
+}
+
+// surfCookieDomainValue vets and canonicalizes the configured cookie
+// domain. The value goes verbatim into a Domain attribute and a bad
+// one makes the browser drop the whole cookie — the login would answer
+// 200 and the session would silently never stick — so anything that is
+// not a plain dotted hostname is treated as unset. The legacy leading
+// dot is accepted and dropped (Go normalizes it away on the wire).
+func surfCookieDomainValue(v string) string {
+	d := strings.ToLower(strings.TrimSpace(v))
+	d = strings.TrimPrefix(d, ".")
+	if d == "" || strings.Contains(d, "..") || strings.HasPrefix(d, ".") || strings.HasSuffix(d, ".") {
+		return ""
+	}
+	if !strings.Contains(d, ".") {
+		return "" // a single label is never a cookie domain
+	}
+	for i := 0; i < len(d); i++ {
+		ch := d[i]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '-', ch == '.':
+		default:
+			return "" // spaces, ';', '/', … would corrupt or void the cookie
+		}
+	}
+	return d
+}
+
 type AuthHandler struct {
 	Store  *store.Store
 	Config *config.Config
 	Email  *service.EmailService
+
+	// surfGetSetting overrides the settings read the session cookie
+	// domain comes from; nil reads through Store. Tests inject a fake.
+	surfGetSetting func(ctx context.Context, key string) (string, error)
+}
+
+// surfSessionCookieDomain is the Domain attribute for the session and
+// refresh cookies, read per call (it is consulted only when a cookie
+// is issued or cleared: login, refresh, logout). Unset, unreadable or
+// malformed → "" → host-only, today's behavior exactly.
+func (h *AuthHandler) surfSessionCookieDomain(c *gin.Context) string {
+	get := h.surfGetSetting
+	if get == nil {
+		if h.Store == nil {
+			return ""
+		}
+		get = h.Store.GetSetting
+	}
+	return surfReadCookieDomain(c.Request.Context(), get)
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
@@ -97,8 +175,11 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 			ActorType: "user", ActorID: uid, IPAddress: c.ClientIP(),
 		})
 	}
-	setSecureCookie(c, "session", "", -1, "/", h.requestIsHTTPS(c), true)
-	setSecureCookie(c, "refresh_token", "", -1, "/api/v1/auth/refresh", h.requestIsHTTPS(c), true)
+	// The clear must carry the same Domain as the set — a host-only
+	// clear cannot delete a cookie stored for .example.com.
+	dom := h.surfSessionCookieDomain(c)
+	surfSetCookieDomain(c, "session", "", -1, "/", h.requestIsHTTPS(c), true, dom)
+	surfSetCookieDomain(c, "refresh_token", "", -1, "/api/v1/auth/refresh", h.requestIsHTTPS(c), true, dom)
 	response.OK(c, gin.H{"status": "logged_out"})
 }
 
@@ -131,7 +212,7 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 			"user_id", ren.Token.UserID, "token_id", ren.Token.ID)
 		// Clear the cookie on the client so the next page load
 		// doesn't try the dead token again.
-		setSecureCookie(c, "refresh_token", "", -1, "/api/v1/auth/refresh", h.requestIsHTTPS(c), true)
+		surfSetCookieDomain(c, "refresh_token", "", -1, "/api/v1/auth/refresh", h.requestIsHTTPS(c), true, h.surfSessionCookieDomain(c))
 		response.Unauthorized(c, "refresh token reuse detected")
 		return
 	}
@@ -169,7 +250,7 @@ func (h *AuthHandler) issueSession(c *gin.Context, user *model.User) {
 // setRefreshCookie sets the refresh cookie to a token expiring at expiresAt.
 func (h *AuthHandler) setRefreshCookie(c *gin.Context, rawRefresh string, expiresAt time.Time) {
 	maxAge := int(time.Until(expiresAt).Seconds())
-	setSecureCookie(c, "refresh_token", rawRefresh, maxAge, "/api/v1/auth/refresh", h.requestIsHTTPS(c), true)
+	surfSetCookieDomain(c, "refresh_token", rawRefresh, maxAge, "/api/v1/auth/refresh", h.requestIsHTTPS(c), true, h.surfSessionCookieDomain(c))
 }
 
 // issueSessionCookie sets the 24-hour session cookie alone.
@@ -180,7 +261,7 @@ func (h *AuthHandler) issueSessionCookie(c *gin.Context, user *model.User) {
 		h.Config.JWTSecret, user.ID, user.Email, user.Name,
 		user.IsAdmin(), 24*time.Hour,
 	)
-	setSecureCookie(c, "session", token, 24*3600, "/", h.requestIsHTTPS(c), true)
+	surfSetCookieDomain(c, "session", token, 24*3600, "/", h.requestIsHTTPS(c), true, h.surfSessionCookieDomain(c))
 }
 
 func hashToken(raw string) string {

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client"
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { AdminLayout, PortalLayout, PublicLayout } from "@/components/layout"
+import { SurfaceGate } from "@/components/surface-gate"
 import { showToast, ToastBridge, ToastProvider, toastCount } from "@/components/toast"
 import { AuthProvider } from "@/hooks/use-auth"
 import { SiteConfigProvider } from "@/hooks/use-site-config"
@@ -17,6 +18,7 @@ import AnalyticsPage from "@/pages/admin/analytics"
 import APIKeysPage from "@/pages/admin/api-keys"
 import AuditPage from "@/pages/admin/audit"
 import CategoriesPage from "@/pages/admin/categories"
+import AdminConfigPage from "@/pages/admin/config"
 import CouponsPage from "@/pages/admin/coupons"
 import CustomersPage from "@/pages/admin/customers"
 import DashboardPage from "@/pages/admin/dashboard"
@@ -35,6 +37,7 @@ import ReviewsPage from "@/pages/admin/reviews"
 import SettingsPage from "@/pages/admin/settings"
 import TaxRatesPage from "@/pages/admin/tax-rates"
 import WebhooksPage from "@/pages/admin/webhooks"
+import CartPage from "@/pages/cart"
 import CheckoutPage from "@/pages/checkout"
 import CheckoutSuccessPage from "@/pages/checkout-success"
 import GatewayReturnPage from "@/pages/gateway-return"
@@ -85,68 +88,85 @@ createRoot(document.getElementById("root")!).render(
             <SiteConfigProvider>
               <AuthProvider>
                 <ErrorBoundary>
-                  <Routes>
-                    <Route path="/setup" element={<SetupPage />} />
-                    <Route path="/login" element={<LoginPage />} />
-                    <Route path="/checkout/success" element={<CheckoutSuccessPage />} />
-                    {/* Static gateway return page — must beat /checkout/:checkout_id (React Router ranks static first). */}
-                    <Route path="/checkout/gateway-return" element={<GatewayReturnPage />} />
-                    <Route path="/checkout/:checkout_id" element={<CheckoutPage />} />
-                    <Route path="/accept-invite" element={<AcceptInvitePage />} />
+                  {/* SurfaceGate: in multi-host mode the route decides
+                      which hostname serves it and the browser is sent
+                      there (same path + query). Single-host mode — no
+                      `surfaces` in site config — never redirects. */}
+                  <SurfaceGate>
+                    <Routes>
+                      <Route path="/setup" element={<SetupPage />} />
+                      <Route path="/login" element={<LoginPage />} />
+                      <Route path="/checkout/success" element={<CheckoutSuccessPage />} />
+                      {/* Static gateway return page — must beat /checkout/:checkout_id (React Router ranks static first). */}
+                      <Route path="/checkout/gateway-return" element={<GatewayReturnPage />} />
+                      <Route path="/checkout/:checkout_id" element={<CheckoutPage />} />
+                      {/* Cart checkout (plan §23): no :checkout_id, the
+                        items arrive via ?items= or the localStorage
+                        cart. Static route ranks above the param one. */}
+                      <Route path="/checkout" element={<CheckoutPage />} />
+                      <Route path="/accept-invite" element={<AcceptInvitePage />} />
 
-                    {/* Marketplace (public storefront, anonymous) */}
-                    <Route path="/marketplace" element={<PublicLayout />}>
-                      <Route index element={<MarketplacePage />} />
-                      <Route path="products/:slug" element={<MarketplaceProductPage />} />
-                    </Route>
+                      {/* Marketplace (public storefront, anonymous) */}
+                      <Route path="/marketplace" element={<PublicLayout />}>
+                        <Route index element={<MarketplacePage />} />
+                        <Route path="products/:slug" element={<MarketplaceProductPage />} />
+                      </Route>
 
-                    {/* Admin */}
-                    <Route path="/admin" element={<AdminLayout />}>
-                      <Route index element={<DashboardPage />} />
-                      <Route path="products" element={<ProductsPage />} />
-                      <Route path="categories" element={<CategoriesPage />} />
-                      <Route path="reviews" element={<ReviewsPage />} />
-                      <Route path="plans" element={<PlansPage />} />
-                      <Route path="releases" element={<ReleasesPage />} />
-                      <Route path="licenses" element={<LicensesPage />} />
-                      <Route path="api-keys" element={<APIKeysPage />} />
-                      <Route path="webhooks" element={<WebhooksPage />} />
-                      <Route path="addons" element={<AddonsPage />} />
-                      <Route path="coupons" element={<CouponsPage />} />
-                      <Route path="tax-rates" element={<TaxRatesPage />} />
-                      <Route path="orders" element={<OrdersPage />} />
-                      <Route path="orders/:id" element={<OrderDetailPage />} />
-                      <Route path="resellers" element={<ResellersPage />} />
-                      <Route path="resellers/:id" element={<ResellerDetailPage />} />
-                      <Route path="affiliates" element={<AffiliatesPage />} />
-                      <Route path="affiliates/:id" element={<AffiliateDetailPage />} />
-                      <Route path="analytics" element={<AnalyticsPage />} />
-                      <Route path="reports" element={<ReportsPage />} />
-                      <Route path="rbac" element={<RBACRolesPage />} />
-                      <Route path="rbac/roles/:id" element={<RBACRoleDetailPage />} />
-                      <Route path="audit" element={<AuditPage />} />
-                      <Route path="customers" element={<CustomersPage />} />
-                      <Route path="settings" element={<SettingsPage />} />
-                    </Route>
+                      {/* Cart (plan §23) — inside the storefront shell so
+                        the badge and the AGPL footer travel with it. */}
+                      <Route path="/cart" element={<PublicLayout />}>
+                        <Route index element={<CartPage />} />
+                      </Route>
 
-                    {/* Portal */}
-                    <Route path="/portal" element={<PortalLayout />}>
-                      <Route index element={<PortalDashboardPage />} />
-                      <Route path="licenses" element={<PortalLicensesPage />} />
-                      <Route path="subscriptions" element={<PortalSubscriptionsPage />} />
-                      <Route path="devices" element={<PortalDevicesPage />} />
-                      <Route path="usage" element={<PortalUsagePage />} />
-                      <Route path="orders" element={<PortalOrdersPage />} />
-                      <Route path="downloads" element={<PortalDownloadsPage />} />
-                      <Route path="api-keys" element={<PortalAPIKeysPage />} />
-                      <Route path="webhooks" element={<PortalWebhooksPage />} />
-                      <Route path="notifications" element={<NotificationsPage />} />
-                      <Route path="support" element={<PortalSupportPage />} />
-                      <Route path="account" element={<PortalAccountPage />} />
-                    </Route>
+                      {/* Admin */}
+                      <Route path="/admin" element={<AdminLayout />}>
+                        <Route index element={<DashboardPage />} />
+                        <Route path="products" element={<ProductsPage />} />
+                        <Route path="categories" element={<CategoriesPage />} />
+                        <Route path="reviews" element={<ReviewsPage />} />
+                        <Route path="plans" element={<PlansPage />} />
+                        <Route path="releases" element={<ReleasesPage />} />
+                        <Route path="licenses" element={<LicensesPage />} />
+                        <Route path="api-keys" element={<APIKeysPage />} />
+                        <Route path="webhooks" element={<WebhooksPage />} />
+                        <Route path="addons" element={<AddonsPage />} />
+                        <Route path="coupons" element={<CouponsPage />} />
+                        <Route path="tax-rates" element={<TaxRatesPage />} />
+                        <Route path="orders" element={<OrdersPage />} />
+                        <Route path="orders/:id" element={<OrderDetailPage />} />
+                        <Route path="resellers" element={<ResellersPage />} />
+                        <Route path="resellers/:id" element={<ResellerDetailPage />} />
+                        <Route path="affiliates" element={<AffiliatesPage />} />
+                        <Route path="affiliates/:id" element={<AffiliateDetailPage />} />
+                        <Route path="analytics" element={<AnalyticsPage />} />
+                        <Route path="reports" element={<ReportsPage />} />
+                        <Route path="rbac" element={<RBACRolesPage />} />
+                        <Route path="rbac/roles/:id" element={<RBACRoleDetailPage />} />
+                        <Route path="audit" element={<AuditPage />} />
+                        <Route path="customers" element={<CustomersPage />} />
+                        <Route path="settings" element={<SettingsPage />} />
+                        <Route path="config" element={<AdminConfigPage />} />
+                      </Route>
 
-                    <Route path="*" element={<Navigate to="/login" replace />} />
-                  </Routes>
+                      {/* Portal */}
+                      <Route path="/portal" element={<PortalLayout />}>
+                        <Route index element={<PortalDashboardPage />} />
+                        <Route path="licenses" element={<PortalLicensesPage />} />
+                        <Route path="subscriptions" element={<PortalSubscriptionsPage />} />
+                        <Route path="devices" element={<PortalDevicesPage />} />
+                        <Route path="usage" element={<PortalUsagePage />} />
+                        <Route path="orders" element={<PortalOrdersPage />} />
+                        <Route path="downloads" element={<PortalDownloadsPage />} />
+                        <Route path="api-keys" element={<PortalAPIKeysPage />} />
+                        <Route path="webhooks" element={<PortalWebhooksPage />} />
+                        <Route path="notifications" element={<NotificationsPage />} />
+                        <Route path="support" element={<PortalSupportPage />} />
+                        <Route path="account" element={<PortalAccountPage />} />
+                      </Route>
+
+                      <Route path="*" element={<Navigate to="/login" replace />} />
+                    </Routes>
+                  </SurfaceGate>
                 </ErrorBoundary>
               </AuthProvider>
             </SiteConfigProvider>

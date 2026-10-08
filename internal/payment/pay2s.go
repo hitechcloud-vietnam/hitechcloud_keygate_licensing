@@ -62,36 +62,76 @@ type pay2sBankAccount struct {
 }
 
 // Pay2SProvider implements PaymentProvider for Pay2S.
+//
+// Credentials come from a getter resolved at call time, so an operator
+// can complete or rotate them in the admin config (config-in-DB)
+// without restarting the server. NewPay2S wraps a constant getter for
+// callers that configure once at boot.
 type Pay2SProvider struct {
-	cfg          config.Pay2SConfig
-	bankAccounts []pay2sBankAccount
+	pay2sCreds func(context.Context) (config.Pay2SConfig, error)
 }
 
 var _ PaymentProvider = (*Pay2SProvider)(nil)
 
-// NewPay2S builds a provider from configuration. Bank accounts are parsed
-// once here so Enabled() and CreatePayment() cannot disagree.
+// cfgsvcCredsTimeout bounds credential reads on paths that have no
+// request context of their own (Enabled, webhook verification): the
+// getter may reach the database and must not hang a status probe.
+const cfgsvcCredsTimeout = 2 * time.Second
+
+// cfgsvcCredsCtx returns the bounded context for such a read.
+func cfgsvcCredsCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), cfgsvcCredsTimeout)
+}
+
+// NewPay2S builds a provider from static configuration — a thin
+// wrapper over a constant getter, so every boot-configured caller and
+// test keeps working unchanged.
 func NewPay2S(cfg config.Pay2SConfig) *Pay2SProvider {
-	if strings.TrimSpace(cfg.BaseURL) == "" {
-		cfg.BaseURL = pay2sProductionBaseURL
-	}
-	return &Pay2SProvider{
-		cfg:          cfg,
-		bankAccounts: pay2sParseBankAccounts(cfg.BankAccounts),
-	}
+	return NewPay2SDynamic(func(context.Context) (config.Pay2SConfig, error) { return cfg, nil })
+}
+
+// NewPay2SDynamic builds a provider whose credentials are read
+// through get at call time (e.g. service.ConfigService.Pay2SGetter —
+// DB over env over default).
+func NewPay2SDynamic(get func(context.Context) (config.Pay2SConfig, error)) *Pay2SProvider {
+	return &Pay2SProvider{pay2sCreds: get}
 }
 
 // Name returns the stable provider id.
 func (p *Pay2SProvider) Name() string { return ProviderPay2S }
 
+// pay2sConfig resolves the credentials in effect right now, together
+// with their parsed bank accounts — both derived from ONE read, so
+// Enabled() and a request can never disagree.
+func (p *Pay2SProvider) pay2sConfig(ctx context.Context) (config.Pay2SConfig, []pay2sBankAccount, error) {
+	cfg := config.Pay2SConfig{}
+	if p != nil && p.pay2sCreds != nil {
+		c, err := p.pay2sCreds(ctx)
+		if err != nil {
+			return cfg, nil, err
+		}
+		cfg = c
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		cfg.BaseURL = pay2sProductionBaseURL
+	}
+	return cfg, pay2sParseBankAccounts(cfg.BankAccounts), nil
+}
+
 // Enabled is all-or-nothing over the credentials the API actually needs:
 // partner code, access key (signing + auth), secret key (HMAC) and at
 // least one bank account (the create API requires bankAccounts).
 func (p *Pay2SProvider) Enabled() bool {
-	return p.cfg.PartnerCode != "" &&
-		p.cfg.AccessKey != "" &&
-		p.cfg.SecretKey != "" &&
-		len(p.bankAccounts) > 0
+	ctx, cancel := cfgsvcCredsCtx()
+	defer cancel()
+	cfg, banks, err := p.pay2sConfig(ctx)
+	if err != nil {
+		return false
+	}
+	return cfg.PartnerCode != "" &&
+		cfg.AccessKey != "" &&
+		cfg.SecretKey != "" &&
+		len(banks) > 0
 }
 
 // pay2sParseBankAccounts parses repeated entries of the form
@@ -369,7 +409,11 @@ func pay2sCancelURL(base string) string {
 // thống đối tác nên nhận diện đơn bằng orderId"); the IPN requestId is an
 // internal id and unusable as a handle.
 func (p *Pay2SProvider) CreatePayment(ctx context.Context, req CreatePaymentRequest) (*CreatePaymentResult, error) {
-	if !p.Enabled() {
+	cfg, banks, err := p.pay2sConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.PartnerCode == "" || cfg.AccessKey == "" || cfg.SecretKey == "" || len(banks) == 0 {
 		return nil, ErrProviderNotConfigured
 	}
 	if req.Currency != "VND" {
@@ -397,22 +441,22 @@ func (p *Pay2SProvider) CreatePayment(ctx context.Context, req CreatePaymentRequ
 	orderInfo := pay2sOrderInfo(req.OrderID)
 	requestID := pay2sNewRequestID(req.OrderID)
 	amountStr := strconv.FormatInt(req.AmountMinor, 10) // int64 dong
-	signature := pay2sHMACHex(p.cfg.SecretKey, pay2sCreateSignatureRaw(
-		p.cfg.AccessKey, amountStr, ipnURL, req.OrderID, orderInfo,
-		p.cfg.PartnerCode, req.ReturnURL, requestID, pay2sRequestTypeCreate,
+	signature := pay2sHMACHex(cfg.SecretKey, pay2sCreateSignatureRaw(
+		cfg.AccessKey, amountStr, ipnURL, req.OrderID, orderInfo,
+		cfg.PartnerCode, req.ReturnURL, requestID, pay2sRequestTypeCreate,
 	))
 
-	bankAccounts := make([]pay2sBankAccountsItem, 0, len(p.bankAccounts))
-	for _, a := range p.bankAccounts {
+	bankAccounts := make([]pay2sBankAccountsItem, 0, len(banks))
+	for _, a := range banks {
 		bankAccounts = append(bankAccounts, pay2sBankAccountsItem{
 			AccountNumber: a.AccountNumber,
 			BankID:        a.BankID,
 		})
 	}
 	body := pay2sCreateRequest{
-		AccessKey:    p.cfg.AccessKey,
-		PartnerCode:  p.cfg.PartnerCode,
-		PartnerName:  p.cfg.PartnerName,
+		AccessKey:    cfg.AccessKey,
+		PartnerCode:  cfg.PartnerCode,
+		PartnerName:  cfg.PartnerName,
 		RequestID:    requestID,
 		Amount:       req.AmountMinor,
 		OrderID:      req.OrderID,
@@ -425,7 +469,7 @@ func (p *Pay2SProvider) CreatePayment(ctx context.Context, req CreatePaymentRequ
 		Signature:    signature,
 	}
 
-	status, data, err := pay2sPostJSON(ctx, pay2sCreateURL(p.cfg.BaseURL), body)
+	status, data, err := pay2sPostJSON(ctx, pay2sCreateURL(cfg.BaseURL), body)
 	if err != nil {
 		return nil, err
 	}
@@ -457,17 +501,23 @@ func (p *Pay2SProvider) CreatePayment(ctx context.Context, req CreatePaymentRequ
 // resultCode mapping (documented result codes): 0 = success, 9000 =
 // pending, anything else = failed.
 func (p *Pay2SProvider) VerifyWebhook(payload []byte) (*WebhookEvent, error) {
+	credsCtx, cancel := cfgsvcCredsCtx()
+	defer cancel()
+	cfg, _, err := p.pay2sConfig(credsCtx)
+	if err != nil {
+		return nil, err
+	}
 	var ipn pay2sIPN
 	if err := json.Unmarshal(payload, &ipn); err != nil {
 		return nil, ErrWebhookPayloadMalformed
 	}
-	want := pay2sHMACHex(p.cfg.SecretKey, pay2sIPNSignatureRaw(p.cfg.AccessKey, &ipn))
+	want := pay2sHMACHex(cfg.SecretKey, pay2sIPNSignatureRaw(cfg.AccessKey, &ipn))
 	if !hmac.Equal([]byte(ipn.M2Signature.s), []byte(want)) {
 		return nil, ErrWebhookSignatureInvalid
 	}
 	// MAC verified — the payload is authentic, but it may still be for
 	// ANOTHER partner; that is a signature-level failure, not ours.
-	if ipn.PartnerCode.s != p.cfg.PartnerCode {
+	if ipn.PartnerCode.s != cfg.PartnerCode {
 		return nil, ErrWebhookSignatureInvalid
 	}
 	amount, err := strconv.ParseInt(ipn.Amount.s, 10, 64)
@@ -529,24 +579,28 @@ func (p *Pay2SProvider) VerifyWebhook(payload []byte) (*WebhookEvent, error) {
 // the create requestId). reason is accepted for the PaymentProvider
 // contract but NOT transmitted — the cancel API has no reason field.
 func (p *Pay2SProvider) VoidPayment(ctx context.Context, ref, reason string) error {
-	if !p.Enabled() {
+	cfg, _, err := p.pay2sConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if cfg.PartnerCode == "" || cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return ErrProviderNotConfigured
 	}
 	if ref == "" {
 		return fmt.Errorf("pay2s: order id is required")
 	}
 	requestID := pay2sNewRequestID("CANCEL-" + ref)
-	signature := pay2sHMACHex(p.cfg.SecretKey,
-		pay2sCancelSignatureRaw(p.cfg.AccessKey, ref, p.cfg.PartnerCode, requestID))
+	signature := pay2sHMACHex(cfg.SecretKey,
+		pay2sCancelSignatureRaw(cfg.AccessKey, ref, cfg.PartnerCode, requestID))
 	body := pay2sCancelRequest{
-		AccessKey:   p.cfg.AccessKey,
-		PartnerCode: p.cfg.PartnerCode,
+		AccessKey:   cfg.AccessKey,
+		PartnerCode: cfg.PartnerCode,
 		OrderID:     ref,
 		RequestID:   requestID,
 		RequestType: pay2sRequestTypeCancel,
 		Signature:   signature,
 	}
-	status, data, err := pay2sPostJSON(ctx, pay2sCancelURL(p.cfg.BaseURL), body)
+	status, data, err := pay2sPostJSON(ctx, pay2sCancelURL(cfg.BaseURL), body)
 	if err != nil {
 		return err
 	}

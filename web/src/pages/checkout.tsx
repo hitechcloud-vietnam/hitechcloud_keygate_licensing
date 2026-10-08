@@ -12,19 +12,27 @@ import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/hooks/use-auth"
 import { useSiteConfig } from "@/hooks/use-site-config"
 import { type TranslationKeys, useI18n } from "@/i18n"
-import type { CheckoutQuoteRequest, CheckoutQuoteResult, GatewayMethod } from "@/lib/api"
+import type { CheckoutQuoteItem, CheckoutQuoteRequest, CheckoutQuoteResult, GatewayMethod } from "@/lib/api"
 import { ApiError, checkout } from "@/lib/api"
 import { attributionFromSearch, attributionQuery } from "@/lib/attribution"
+import { decodeCartItems, useCart } from "@/lib/cart"
 import { COUNTRY_CODES, countryDisplayName } from "@/lib/countries"
 import { formatBps, formatMinor } from "@/lib/money"
 
-// A checkout prices its one item — named by the checkout_id in the URL —
-// with a coupon and the buyer's country tax, then hands off to
-// payment: either the server /pay/:checkout_id route (a 302 to Stripe)
-// or, for VND orders, a one-off payment through a Vietnamese gateway
-// (Pay2S / ZaloPay / payOS — plan §25) where the gateway's IPN settles
-// the order server-side. Nothing is written until the buyer pays: the
-// quote is a preview, and every amount is integer minor units.
+// A checkout prices its items with a coupon and the buyer's country
+// tax, then hands off to payment: either Stripe (a 302 to the server
+// /pay/:checkout_id route for one item, POST /checkout/cart for the
+// whole cart) or, for VND orders, a one-off payment through a
+// Vietnamese gateway (Pay2S / ZaloPay / payOS — plan §25) where the
+// gateway's IPN settles the order server-side. Nothing is written
+// until the buyer pays: the quote is a preview, and every amount is
+// integer minor units.
+//
+// Two ways in: /checkout/:checkout_id prices that one payment link,
+// and /checkout (or ?cart=1) prices the CART — items carried by
+// ?items=plan_id:quantity,… (the hand-off the cart page builds for
+// cross-host checkouts) or, when that is absent, read from the
+// localStorage cart (lib/cart.ts). The server re-prices everything.
 export default function CheckoutPage() {
   const { t, locale } = useI18n()
   const { site_name, logo_url, attribution_text, attribution_url } = useSiteConfig()
@@ -39,6 +47,18 @@ export default function CheckoutPage() {
   // sharing ?coupon_code= or a country-pinned campaign. Pre-fill from
   // the URL so what the visitor was promised is what gets quoted.
   const initialParams = new URLSearchParams(search)
+
+  // Cart mode: the lines to price. ?items= wins (the cart page encodes
+  // the pair list so it survives a hop to a payments host, where the
+  // localStorage cart does not exist); otherwise the stored cart.
+  const { items: storedCart } = useCart()
+  const urlCartItems = decodeCartItems(initialParams.get("items") || "")
+  const cartItems = checkoutId
+    ? []
+    : urlCartItems.length > 0
+      ? urlCartItems
+      : storedCart.map(({ plan_id, quantity }) => ({ plan_id, quantity }))
+
   const [country, setCountry] = useState(initialParams.get("country") || "")
   const [couponInput, setCouponInput] = useState(initialParams.get("coupon_code") || "")
   const [committedCoupon, setCommittedCoupon] = useState(initialParams.get("coupon_code") || "")
@@ -52,13 +72,20 @@ export default function CheckoutPage() {
   const [payError, setPayError] = useState("")
   const [paying, setPaying] = useState(false)
 
+  const quoteItems: CheckoutQuoteItem[] = checkoutId ? [{ checkout_id: checkoutId, quantity: 1 }] : cartItems
   const quote = useQuery({
-    queryKey: ["checkout-quote", checkoutId, country, committedCoupon],
-    enabled: !!checkoutId,
+    queryKey: [
+      "checkout-quote",
+      checkoutId || "cart",
+      cartItems.map((i) => `${i.plan_id}x${i.quantity}`).join(","),
+      country,
+      committedCoupon,
+    ],
+    enabled: checkoutId ? true : cartItems.length > 0,
     queryFn: async () => {
       setCouponError("")
       const base: CheckoutQuoteRequest = {
-        items: [{ checkout_id: checkoutId, quantity: 1 }],
+        items: quoteItems,
         country,
         region: "",
         tax_inclusive: false,
@@ -100,26 +127,50 @@ export default function CheckoutPage() {
       // One-off VND gateway payment: the server prices and creates the
       // order, the gateway collects, its IPN fulfils. We only hold the
       // redirect. The buyer's email is mandatory — the licence must be
-      // deliverable.
+      // deliverable. A cart names its lines by plan_id; the single
+      // checkout names one plan off the quote.
       const planId = quote.data?.lines?.[0]?.plan_id
       if (!email.trim()) {
         setEmailError(t("checkout.emailRequired"))
         return
       }
-      if (!planId) {
+      if (checkoutId ? !planId : cartItems.length === 0) {
         setPayError(t("checkout.gatewayError"))
         return
       }
       setPaying(true)
       try {
         const res = await checkout.gatewayPay({
-          plan_id: planId,
+          ...(checkoutId ? { plan_id: planId as string } : { items: cartItems }),
           provider: method,
           coupon_code: committedCoupon || undefined,
           country: country || undefined,
           email: email.trim(),
         })
         window.location.assign(res.pay_url)
+        return
+      } catch (e) {
+        setPayError(e instanceof Error ? e.message : t("checkout.gatewayError"))
+      } finally {
+        setPaying(false)
+      }
+      return
+    }
+    if (!checkoutId) {
+      // Cart → Stripe: one payment for every line. The server prices
+      // and creates the order; checkout_url is where the browser goes.
+      setPaying(true)
+      try {
+        const attribution = attributionFromSearch(search, user?.email)
+        const res = await checkout.cartPay({
+          items: cartItems,
+          coupon_code: committedCoupon || undefined,
+          country: country || undefined,
+          email: email.trim() || user?.email || undefined,
+          reseller_code: attribution.reseller_code,
+          ref: attribution.ref,
+        })
+        window.location.assign(res.checkout_url)
         return
       } catch (e) {
         setPayError(e instanceof Error ? e.message : t("checkout.gatewayError"))
@@ -162,9 +213,9 @@ export default function CheckoutPage() {
             <p className="text-muted-foreground">{t("checkout.pageSubtitle")}</p>
           </div>
 
-          {!checkoutId ? (
+          {!checkoutId && cartItems.length === 0 ? (
             <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">{t("checkout.missingId")}</CardContent>
+              <CardContent className="py-12 text-center text-muted-foreground">{t("checkout.noCartItems")}</CardContent>
             </Card>
           ) : quote.isLoading ? (
             <div className="space-y-4">

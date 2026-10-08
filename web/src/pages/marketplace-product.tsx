@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertCircle, ArrowLeft, BookOpen, Download, Github, Globe, Package } from "lucide-react"
+import { AlertCircle, ArrowLeft, BookOpen, Download, Github, Globe, Package, ShoppingCart } from "lucide-react"
 import { useState } from "react"
 import { Link, useLocation, useParams } from "react-router-dom"
 import { ProductCard } from "@/components/product-card"
@@ -23,9 +23,10 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/hooks/use-auth"
 import { useI18n } from "@/i18n"
-import type { MarketplaceProduct, PublicReview } from "@/lib/api"
+import type { MarketplacePlan, MarketplaceProduct, PublicReview } from "@/lib/api"
 import { ApiError, marketplace, portal } from "@/lib/api"
 import { attributionFromSearch, withAttribution } from "@/lib/attribution"
+import { useCart } from "@/lib/cart"
 import { formatMinor } from "@/lib/money"
 import { formatDate } from "@/lib/utils"
 
@@ -104,6 +105,19 @@ function ProductDetail({ product }: { product: MarketplaceProduct }) {
   // /pay route — where the sale is actually attributed.
   const { search } = useLocation()
   const attribution = attributionFromSearch(search)
+  // Cart (plan §23): "add to plan" fills the localStorage cart the
+  // badge in the header counts; the server re-prices at checkout.
+  const { add: addCartItem } = useCart()
+  const addPlan = (p: MarketplacePlan) => {
+    addCartItem({
+      plan_id: p.id,
+      product_name: product.name,
+      plan_name: p.name,
+      unit_amount_minor: p.price ?? 0,
+      currency: p.currency ?? "",
+    })
+    showToast(t("cart.added"), "success")
+  }
   const images = product.images || []
   const hasLinks = Boolean(
     product.documentation_url || product.website_url || product.repository_url || product.download_url,
@@ -218,15 +232,18 @@ function ProductDetail({ product }: { product: MarketplaceProduct }) {
                             )}
                           </td>
                           <td className="py-3 text-right">
-                            {p.checkout_id ? (
-                              <Button asChild size="sm">
-                                <Link to={withAttribution(`/checkout/${p.checkout_id}`, attribution)}>
-                                  {t("marketplace.buy")}
-                                </Link>
+                            <div className="flex items-center justify-end gap-2">
+                              <Button variant="outline" size="sm" onClick={() => addPlan(p)}>
+                                <ShoppingCart className="h-4 w-4 mr-1" /> {t("cart.add")}
                               </Button>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
+                              {p.checkout_id && (
+                                <Button asChild size="sm">
+                                  <Link to={withAttribution(`/checkout/${p.checkout_id}`, attribution)}>
+                                    {t("marketplace.buy")}
+                                  </Link>
+                                </Button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}

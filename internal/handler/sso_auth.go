@@ -479,12 +479,22 @@ func (h *SSOAuthHandler) issueSession(c *gin.Context, user *model.User) {
 		h.Config.JWTSecret, user.ID, user.Email, user.Name,
 		user.IsAdmin(), 24*time.Hour,
 	)
-	setSecureCookie(c, "session", token, 24*3600, "/", h.requestIsHTTPS(c), true)
+	// Same session_cookie_domain setting as the OTP/password login so
+	// an SSO session can roam the site's subdomains identically. The
+	// store is an interface here — fakes without GetSetting keep the
+	// host-only behaviour.
+	dom := ""
+	if gs, ok := h.Store.(interface {
+		GetSetting(context.Context, string) (string, error)
+	}); ok {
+		dom = surfReadCookieDomain(c.Request.Context(), gs.GetSetting)
+	}
+	surfSetCookieDomain(c, "session", token, 24*3600, "/", h.requestIsHTTPS(c), true, dom)
 	rawRefresh := randomHex(32)
 	expiresAt := time.Now().Add(refreshTokenTTL)
 	_ = h.Store.CreateRefreshToken(c, user.ID, hashToken(rawRefresh), expiresAt)
-	setSecureCookie(c, "refresh_token", rawRefresh,
-		int(time.Until(expiresAt).Seconds()), "/api/v1/auth/refresh", h.requestIsHTTPS(c), true)
+	surfSetCookieDomain(c, "refresh_token", rawRefresh,
+		int(time.Until(expiresAt).Seconds()), "/api/v1/auth/refresh", h.requestIsHTTPS(c), true, dom)
 }
 
 // ssoDisplayName joins given + family name for the user's display name.

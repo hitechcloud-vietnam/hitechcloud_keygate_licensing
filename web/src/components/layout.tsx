@@ -21,9 +21,11 @@ import {
   Receipt,
   Rocket,
   ScrollText,
+  Search,
   Settings,
   ShieldCheck,
   ShoppingCart,
+  SlidersHorizontal,
   Star,
   Store,
   Tag,
@@ -33,10 +35,13 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom"
+import { CartBadge } from "@/components/cart-badge"
+import { CommandPalette, useCommandPaletteHotkey } from "@/components/command-palette"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { LanguageSwitcher } from "@/components/language-switcher"
 import { NotificationBell } from "@/components/notification-bell"
 import { ServiceUnavailableScreen } from "@/components/service-unavailable"
+import { SurfaceSwitcher } from "@/components/surface-switcher"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -57,6 +62,10 @@ export function AdminLayout() {
   const { site_name, logo_url, attribution_text, attribution_url } = useSiteConfig()
   const { t } = useI18n()
   const [navOpen, setNavOpen] = useState(false)
+  // Cmd/Ctrl+K anywhere in this shell opens the command palette
+  // (plan §87); the search buttons below are the pointer route to it.
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  useCommandPaletteHotkey(setPaletteOpen)
 
   type NavItem = { to: string; label: string; icon: React.ComponentType<{ className?: string }> }
   type NavGroup = { label: string; items: NavItem[] }
@@ -113,7 +122,10 @@ export function AdminLayout() {
     },
     {
       label: t("nav.administration"),
-      items: [{ to: "/admin/rbac", label: t("nav.rolesAccess"), icon: ShieldCheck }],
+      items: [
+        { to: "/admin/config", label: t("nav.config"), icon: SlidersHorizontal },
+        { to: "/admin/rbac", label: t("nav.rolesAccess"), icon: ShieldCheck },
+      ],
     },
   ]
   const location = useLocation()
@@ -210,6 +222,15 @@ export function AdminLayout() {
       {/* Language choice beside the user menu: a preference that
         belongs to whoever is signed in, one tap away from their name. */}
       <div className="p-3 flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 shrink-0"
+          aria-label={t("search.open")}
+          onClick={() => setPaletteOpen(true)}
+        >
+          <Search className="h-4 w-4" />
+        </Button>
         <NotificationBell />
         <LanguageSwitcher iconOnly />
         <DropdownMenu>
@@ -238,6 +259,11 @@ export function AdminLayout() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {/* Surface switcher: only renders when the 5-domain split is
+        configured; single-host installs see nothing here. */}
+      <div className="px-2 pb-1">
+        <SurfaceSwitcher />
+      </div>
       {/* Attribution required by AGPL v3 Section 7(b) — see NOTICE */}
       <div className="px-4 py-2 border-t text-center">
         <a
@@ -254,6 +280,7 @@ export function AdminLayout() {
 
   return (
     <div className="flex h-screen bg-background">
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       {/* First tab stop on every page: past the sidebar and header
         straight to the content, for keyboard users. */}
       <a
@@ -298,6 +325,15 @@ export function AdminLayout() {
           <span className="min-w-0 flex-1 truncate font-semibold tracking-tight">
             {currentPage?.label ?? site_name}
           </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-11 w-11 shrink-0"
+            aria-label={t("search.open")}
+            onClick={() => setPaletteOpen(true)}
+          >
+            <Search className="h-5 w-5" />
+          </Button>
           <NotificationBell />
           <LanguageSwitcher iconOnly />
         </header>
@@ -336,6 +372,8 @@ export function PortalLayout() {
   const { user, loading, unavailable, logout, refetch } = useAuth()
   const { site_name, logo_url, attribution_text, attribution_url } = useSiteConfig()
   const { t } = useI18n()
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  useCommandPaletteHotkey(setPaletteOpen)
 
   const portalNav = [
     { to: "/portal", label: t("nav.dashboard"), icon: LayoutDashboard },
@@ -359,6 +397,7 @@ export function PortalLayout() {
 
   return (
     <div className="min-h-screen bg-background">
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
@@ -375,6 +414,15 @@ export function PortalLayout() {
               row of five labelled controls overflows the header, and a
               header that scrolls sideways takes the page with it. */}
           <div className="flex items-center gap-1 sm:gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              aria-label={t("search.open")}
+              onClick={() => setPaletteOpen(true)}
+            >
+              <Search className="h-4 w-4" />
+            </Button>
             <NotificationBell />
             <Link to="/marketplace" className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <Button variant="ghost" size="sm" className="gap-2">
@@ -395,6 +443,7 @@ export function PortalLayout() {
               </Link>
             )}
             <LanguageSwitcher />
+            <SurfaceSwitcher />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="gap-2" aria-label={user.name || user.email}>
@@ -496,6 +545,7 @@ export function PublicLayout() {
                 <span className="hidden sm:inline">{t("nav.marketplace")}</span>
               </div>
             </Link>
+            <CartBadge />
             <LanguageSwitcher />
             <Link to="/login">
               <Button variant="outline" size="sm">

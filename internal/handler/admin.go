@@ -2667,22 +2667,38 @@ func (h *AdminHandler) RevokeLicense(c *gin.Context) {
 	if !h.checkLicenseScope(c, id) {
 		return
 	}
-	if err := h.Store.RevokeLicense(c, id); err != nil {
+	// Revocation reason (plan §80): optional body {"reason"} validated
+	// against the closed vocabulary in model. Unknown → 400. Absent or
+	// empty → model.DefaultRevokeReason (administrative), matching the
+	// store's own fallback.
+	reason := model.DefaultRevokeReason
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&body); err == nil && body.Reason != "" {
+		if !model.ValidRevokeReason(body.Reason) {
+			response.BadRequest(c, "invalid revocation reason")
+			return
+		}
+		reason = body.Reason
+	}
+	if err := h.Store.RevokeLicenseWithReason(c, id, reason, adminID(c)); err != nil {
 		response.NotFound(c, err.Error())
 		return
 	}
 	h.Store.Audit(c, &model.AuditLog{
 		Entity: "license", EntityID: id, Action: "revoked",
 		ActorType: "admin", ActorID: adminID(c),
+		Changes: map[string]any{"reason": reason},
 	})
 	if h.Webhook != nil {
 		if lic, err := h.Store.FindLicenseByID(c, id); err == nil {
 			h.Webhook.Dispatch(c, lic.ProductID, "license.revoked", map[string]any{
-				"license_id": id, "email": lic.Email,
+				"license_id": id, "email": lic.Email, "reason": reason,
 			})
 		}
 	}
-	response.OK(c, gin.H{"status": "revoked"})
+	response.OK(c, gin.H{"status": "revoked", "reason": reason})
 }
 
 func (h *AdminHandler) RefundLicense(c *gin.Context) {

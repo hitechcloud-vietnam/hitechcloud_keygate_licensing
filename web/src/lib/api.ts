@@ -149,7 +149,7 @@ function del<T>(path: string) {
 
 // ─── Site Config (public, no auth) ───
 export const site = {
-  config: () => get<Record<string, string>>("/config"),
+  config: () => get<SiteConfigResponse>("/config"),
 }
 
 // ─── Auth ───
@@ -193,7 +193,12 @@ export const checkout = {
   gatewayMethods: () => get<{ methods: GatewayMethod[] }>("/checkout/gateway-pay/methods"),
   // Start a one-off VND payment through a gateway. The server prices
   // the order itself — no amount is sent. Returns the redirect target.
+  // Accepts a single plan_id (one-off checkout) or items (cart).
   gatewayPay: (body: GatewayPayRequest) => post<GatewayPayResult>("/checkout/gateway-pay", body),
+  // Cart checkout: several plans in one Stripe payment. 404 until the
+  // backend route lands — the cart page surfaces the failure like any
+  // other pay error.
+  cartPay: (body: CheckoutCartRequest) => post<CheckoutCartResult>("/checkout/cart", body),
   // Polled by the browser return page while the gateway's IPN settles
   // the order server-side.
   gatewayPayStatus: (orderNumber: string) =>
@@ -976,6 +981,30 @@ export const admin = {
       method: "DELETE",
       body: JSON.stringify({ role_id: roleId }),
     }),
+
+  // ─── Global search (plan §86) — the command palette's data half ───
+  // One lookup across the catalog, commerce and partner tables.
+  // `types` is a comma-separated subset of the closed vocabulary;
+  // absent means every type. The server clamps limit to 50 and
+  // answers {results: [{type, id, title, subtitle, url}]}; url is an
+  // SPA route. A licence is found by its key HASH server-side and the
+  // hit never carries key material.
+  search: (params: { q: string; types?: string; limit?: number }) =>
+    get<{ results: AdminSearchResult[] }>(`/admin/search?${listQuery(params)}`),
+
+  // ─── Config-in-DB (Agent B catalog) ───
+  // The runtime config catalog: categories of typed keys, secrets
+  // write-only (value always empty, `set` says whether one is stored).
+  getConfig: () => get<{ categories: ConfigCategory[] }>("/admin/config"),
+  // Save sends ONLY changed keys — plain values under `values`, new
+  // secret material under `secrets`. Keys needing a restart to take
+  // effect come back as restarted_required (the keys the server wants
+  // bounced).
+  updateConfig: (body: { values?: Record<string, string>; secrets?: Record<string, string> }) =>
+    put<{ updated: string[]; restarted_required: string[] }>("/admin/config", body),
+  // Reset drops the stored value (and the secret) back to the
+  // default / env fallback for one key.
+  resetConfigKey: (key: string) => del<{ reset: string }>(`/admin/config/${encodeURIComponent(key)}`),
 }
 
 // ─── Types ───
@@ -1729,7 +1758,11 @@ export interface CustomerAPIKey {
 // writing anything. Unit prices are resolved server-side; there is no
 // amount field to send. Every amount is integer minor units.
 export interface CheckoutQuoteItem {
-  checkout_id: string
+  // Each item names its plan EITHER by the checkout_id of its payment
+  // link or directly by plan_id (the cart does the latter) — never
+  // both. The server prices every line; there is no amount to send.
+  checkout_id?: string
+  plan_id?: string
   quantity: number
 }
 export interface CheckoutQuoteRequest {
@@ -1782,13 +1815,34 @@ export interface GatewayMethod {
   name: string
 }
 export interface GatewayPayRequest {
-  plan_id: string
+  // Single-plan flow (/checkout/:checkout_id) sends plan_id; the cart
+  // flow sends items. The server prices either — no amount is sent.
+  plan_id?: string
+  items?: { plan_id: string; quantity: number }[]
   provider: string
   coupon_code?: string
   country?: string
   // Required by the server: the licence is delivered by email, so a
   // gateway checkout without one is refused (MISSING_CUSTOMER).
   email: string
+}
+
+// ─── Cart checkout (multi-item, Stripe) ───
+// POST /checkout/cart turns the cart's items into a payment link. The
+// server re-prices every line; the amounts the cart carried were only
+// ever display hints. {checkout_url} is where the browser goes next.
+export interface CheckoutCartRequest {
+  items: { plan_id: string; quantity: number }[]
+  coupon_code?: string
+  country?: string
+  email?: string
+  // Checkout attribution, the same authority the /pay/:checkout_id
+  // query carries — optional and purely additive to the pinned body.
+  reseller_code?: string
+  ref?: string
+}
+export interface CheckoutCartResult {
+  checkout_url: string
 }
 export interface GatewayPayResult {
   pay_url: string
@@ -2089,4 +2143,83 @@ export interface Role {
   permissions?: string[]
   created_at: string
   updated_at: string
+}
+
+// ─── Site config: surfaces + payment methods (5-domain split) ───
+//
+// GET /api/v1/config is the flat settings map it has always been,
+// EXTENDED with `surfaces` (hostnames per surface, bare — no scheme;
+// empty/missing entry = that surface rides with the others) and
+// `payment_methods` (the enabled gateways). Both are optional: a
+// server that predates the split answers without them and this app
+// runs in single-host mode, zero redirects.
+export interface SiteSurfaces {
+  apex?: string
+  payments?: string
+  dashboard?: string
+  merchant?: string
+  customer?: string
+  verify?: string
+  hooks?: string
+  docs?: string
+  status?: string
+  go?: string
+  auth?: string
+  cdn?: string
+}
+export interface SitePaymentMethod {
+  id: string
+  name: string
+}
+export interface SiteConfigResponse {
+  site_name?: string
+  brand_color?: string
+  logo_url?: string
+  timezone?: string
+  language?: string
+  attribution_text?: string
+  attribution_url?: string
+  base_url?: string
+  surfaces?: SiteSurfaces
+  payment_methods?: SitePaymentMethod[]
+  [key: string]: unknown
+}
+
+// ─── Global search (plan §86) ───
+//
+// One hit from GET /admin/search. `type` is a member of the closed
+// vocabulary (product | customer | order | invoice | license |
+// subscription | device | reseller | affiliate), `url` is an SPA
+// route — never a credential, never an absolute URL.
+export interface AdminSearchResult {
+  type: string
+  id: string
+  title: string
+  subtitle: string
+  url: string
+}
+
+// ─── Config-in-DB (admin Config UI) ───
+//
+// The catalog GET /admin/config answers: categories of typed keys.
+// A secret entry never carries its value — `value` is always empty
+// and `set` says whether one is stored. `env_var` names the
+// environment fallback (env is fallback-ONLY: a stored value wins),
+// `restart_required` marks keys the server must be bounced for.
+export interface ConfigEntry {
+  key: string
+  category: string
+  type: "string" | "int" | "bool" | "duration" | "secret"
+  value: string
+  set: boolean
+  secret: boolean
+  default: string
+  env_var: string
+  description: string
+  restart_required: boolean
+}
+export interface ConfigCategory {
+  id: string
+  name: string
+  keys: ConfigEntry[]
 }

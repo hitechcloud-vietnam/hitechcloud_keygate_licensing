@@ -1,5 +1,7 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react"
+import type { SitePaymentMethod, SiteSurfaces } from "@/lib/api"
 import { site } from "@/lib/api"
+import { setActiveSurfaces } from "@/lib/surface"
 
 interface SiteConfig {
   site_name: string
@@ -9,6 +11,10 @@ interface SiteConfig {
   language: string
   attribution_text: string
   attribution_url: string
+  // The 5-domain split (optional — absent = single-host mode) and the
+  // enabled payment gateways, both from the extended site config.
+  surfaces: SiteSurfaces
+  payment_methods: SitePaymentMethod[]
   loading: boolean
 }
 
@@ -20,6 +26,8 @@ const defaults: SiteConfig = {
   language: "",
   attribution_text: "Powered by Keygate",
   attribution_url: "https://keygate.app",
+  surfaces: {},
+  payment_methods: [],
   loading: true,
 }
 
@@ -32,6 +40,7 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
     site
       .config()
       .then((data) => {
+        const surfaces = data.surfaces || {}
         setConfig({
           site_name: data.site_name || "HiTechCloud Software License & Commerce Platform",
           brand_color: data.brand_color || "",
@@ -40,16 +49,22 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
           language: data.language || "",
           attribution_text: data.attribution_text || "Powered by Keygate",
           attribution_url: data.attribution_url || "https://keygate.app",
+          surfaces,
+          payment_methods: data.payment_methods || [],
           loading: false,
         })
+        // Surface-aware routing reads the map without prop-threading;
+        // single-host installs register an empty map and stay inert.
+        setActiveSurfaces(surfaces)
         // Dynamic favicon from custom logo. index.html declares
         // multiple <link rel="icon"> variants and browsers pick their
         // favorite (often the sizes="32x32" one), so rewriting only
         // the first link never visibly changed the tab icon — update
         // them all.
-        if (data.logo_url) {
+        const logoURL = data.logo_url
+        if (logoURL) {
           document.querySelectorAll<HTMLLinkElement>("link[rel~='icon']").forEach((link) => {
-            link.href = data.logo_url
+            link.href = logoURL
           })
         }
         if (data.brand_color) {

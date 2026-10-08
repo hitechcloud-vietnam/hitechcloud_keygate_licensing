@@ -76,44 +76,106 @@ var zalopayVNZone = time.FixedZone("GMT+7", 7*60*60)
 // ZaloPayProvider implements PaymentProvider over the ZaloPay OpenAPI
 // (openapi.zalopay.vn / sb-openapi.zalopay.vn). All amounts are int64
 // VND whole dong.
+//
+// Credentials come from a getter resolved at call time (config-in-DB):
+// a corrected AppID or a rotated key takes effect without a restart.
 type ZaloPayProvider struct {
-	zalopayAppID       int
-	zalopayAppIDErr    error // AppID parse failure, surfaced at call time
-	zalopayKey1        string
-	zalopayCallbackKey string
-	zalopayBaseURL     string
-	zalopayHTTPClient  *http.Client
-	zalopayNow         func() time.Time // test seam — frozen clock
+	zalopayCreds      func(context.Context) (config.ZaloPayConfig, error)
+	zalopayHTTPClient *http.Client
+	zalopayNow        func() time.Time // test seam — frozen clock
 }
 
 // Compile-time proof we honor the shared contract.
 var _ PaymentProvider = (*ZaloPayProvider)(nil)
 
-// NewZaloPay builds the provider from config.ZaloPayConfig.
-//
-// The constructor has no error return (pinned signature), so the numeric
-// AppID is parsed HERE and any parse failure is remembered and surfaced
-// at call time (CreatePayment etc. return it) while Enabled() reports
-// false — availability still depends on actual integration capability.
+// NewZaloPay builds the provider from config.ZaloPayConfig — a thin
+// wrapper over a constant getter, so every boot-configured caller and
+// test keeps working unchanged.
 func NewZaloPay(cfg config.ZaloPayConfig) *ZaloPayProvider {
+	return NewZaloPayDynamic(func(context.Context) (config.ZaloPayConfig, error) { return cfg, nil })
+}
+
+// NewZaloPayDynamic builds the provider with credentials read through
+// get at call time (e.g. service.ConfigService.ZaloPayGetter).
+func NewZaloPayDynamic(get func(context.Context) (config.ZaloPayConfig, error)) *ZaloPayProvider {
+	return &ZaloPayProvider{
+		zalopayCreds:      get,
+		zalopayHTTPClient: &http.Client{Timeout: 15 * time.Second},
+		zalopayNow:        time.Now,
+	}
+}
+
+// zalopayResolved is one call's credentials, parsed the way the API
+// wants them. The numeric AppID is parsed per call and any parse
+// failure is remembered and surfaced at call time (CreatePayment etc.
+// return it) while Enabled() reports false — availability still
+// depends on actual integration capability.
+type zalopayResolved struct {
+	appID       int
+	appIDErr    error // AppID parse failure, surfaced at call time
+	key1        string
+	callbackKey string
+	baseURL     string
+}
+
+// zalopayResolveConfig parses one config.ZaloPayConfig.
+func zalopayResolveConfig(cfg config.ZaloPayConfig) zalopayResolved {
 	base := strings.TrimSuffix(strings.TrimSpace(cfg.BaseURL), "/")
 	if base == "" {
 		base = zalopayProdBaseURL
 	}
-	z := &ZaloPayProvider{
-		zalopayKey1:        cfg.Key1,
-		zalopayCallbackKey: cfg.CallbackKey,
-		zalopayBaseURL:     base,
-		zalopayHTTPClient:  &http.Client{Timeout: 15 * time.Second},
-		zalopayNow:         time.Now,
+	r := zalopayResolved{
+		key1:        cfg.Key1,
+		callbackKey: cfg.CallbackKey,
+		baseURL:     base,
 	}
 	appID, err := strconv.Atoi(strings.TrimSpace(cfg.AppID))
 	if err != nil || appID <= 0 {
-		z.zalopayAppIDErr = fmt.Errorf("zalopay: invalid ZALOPAY_APP_ID %q", cfg.AppID)
+		r.appIDErr = fmt.Errorf("zalopay: invalid ZALOPAY_APP_ID %q", cfg.AppID)
 	} else {
-		z.zalopayAppID = appID
+		r.appID = appID
 	}
-	return z
+	return r
+}
+
+// zalopayResolve reads the credentials in effect right now.
+func (z *ZaloPayProvider) zalopayResolve(ctx context.Context) (zalopayResolved, error) {
+	cfg := config.ZaloPayConfig{}
+	if z != nil && z.zalopayCreds != nil {
+		c, err := z.zalopayCreds(ctx)
+		if err != nil {
+			return zalopayResolved{}, err
+		}
+		cfg = c
+	}
+	return zalopayResolveConfig(cfg), nil
+}
+
+// zalopayReady is the pre-flight for every outbound call.
+func (r zalopayResolved) zalopayReady() error {
+	if r.appIDErr != nil {
+		return r.appIDErr
+	}
+	if r.key1 == "" {
+		return fmt.Errorf("zalopay: %w: key1 not configured", ErrProviderNotConfigured)
+	}
+	return nil
+}
+
+// zalopayTime is the clock seam, nil-safe for zero-value providers.
+func (z *ZaloPayProvider) zalopayTime() time.Time {
+	if z != nil && z.zalopayNow != nil {
+		return z.zalopayNow()
+	}
+	return time.Now()
+}
+
+// zalopayClient is the HTTP client seam, nil-safe.
+func (z *ZaloPayProvider) zalopayClient() *http.Client {
+	if z != nil && z.zalopayHTTPClient != nil {
+		return z.zalopayHTTPClient
+	}
+	return &http.Client{Timeout: 15 * time.Second}
 }
 
 // Name returns the stable provider id.
@@ -122,19 +184,14 @@ func (z *ZaloPayProvider) Name() string { return ProviderZaloPay }
 // Enabled reports whether the credentials are all present: AppID parses
 // to a positive int AND Key1 AND CallbackKey are non-empty.
 func (z *ZaloPayProvider) Enabled() bool {
-	return z.zalopayAppIDErr == nil && z.zalopayAppID > 0 &&
-		z.zalopayKey1 != "" && z.zalopayCallbackKey != ""
-}
-
-// zalopayReady is the pre-flight for every outbound call.
-func (z *ZaloPayProvider) zalopayReady() error {
-	if z.zalopayAppIDErr != nil {
-		return z.zalopayAppIDErr
+	ctx, cancel := cfgsvcCredsCtx()
+	defer cancel()
+	r, err := z.zalopayResolve(ctx)
+	if err != nil {
+		return false
 	}
-	if z.zalopayKey1 == "" {
-		return fmt.Errorf("zalopay: %w: key1 not configured", ErrProviderNotConfigured)
-	}
-	return nil
+	return r.appIDErr == nil && r.appID > 0 &&
+		r.key1 != "" && r.callbackKey != ""
 }
 
 // ─── MAC helpers (each documents its EXACT hmac_input from the docs) ───
@@ -414,7 +471,11 @@ func zalopayPostJSON(ctx context.Context, cli *http.Client, url string, body, ou
 
 // CreatePayment starts a one-off payment via POST /v2/create.
 func (z *ZaloPayProvider) CreatePayment(ctx context.Context, req CreatePaymentRequest) (*CreatePaymentResult, error) {
-	if err := z.zalopayReady(); err != nil {
+	r, err := z.zalopayResolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.zalopayReady(); err != nil {
 		return nil, err
 	}
 	if req.Currency != "" && !strings.EqualFold(req.Currency, "VND") {
@@ -427,7 +488,7 @@ func (z *ZaloPayProvider) CreatePayment(ctx context.Context, req CreatePaymentRe
 		return nil, fmt.Errorf("zalopay: order id is required")
 	}
 
-	now := z.zalopayNow()
+	now := z.zalopayTime()
 	appTime := now.UnixMilli()
 	expire := zalopayExpireSeconds(req.ExpiresAt, now)
 	appTransID := zalopayAppTransID(req.OrderID, now)
@@ -443,7 +504,7 @@ func (z *ZaloPayProvider) CreatePayment(ctx context.Context, req CreatePaymentRe
 	item := "[]" // order-create: 'Sử dụng "[]" nếu rỗng'; the description field carries the line-item text
 
 	body := zalopayCreateRequest{
-		AppID:              z.zalopayAppID,
+		AppID:              r.appID,
 		AppUser:            zalopayAppUser(req.BuyerEmail),
 		AppTransID:         appTransID,
 		AppTime:            appTime,
@@ -455,11 +516,11 @@ func (z *ZaloPayProvider) CreatePayment(ctx context.Context, req CreatePaymentRe
 		EmbedData:          embedStr,
 		BankCode:           "",
 	}
-	body.Mac = zalopayHMACHex(z.zalopayKey1,
+	body.Mac = zalopayHMACHex(r.key1,
 		zalopayMacCreateInput(body.AppID, body.AppTransID, body.AppUser, body.Amount, body.AppTime, body.EmbedData, body.Item))
 
 	var resp zalopayCreateResponse
-	if err := zalopayPostJSON(ctx, z.zalopayHTTPClient, z.zalopayBaseURL+"/v2/create", &body, &resp); err != nil {
+	if err := zalopayPostJSON(ctx, z.zalopayClient(), r.baseURL+"/v2/create", &body, &resp); err != nil {
 		return nil, err
 	}
 	if resp.ReturnCode != zalopayReturnOK {
@@ -484,16 +545,20 @@ func (z *ZaloPayProvider) CapturePayment(ctx context.Context, ref string) (*Paym
 
 // GetPaymentStatus queries POST /v2/query for the authoritative state.
 func (z *ZaloPayProvider) GetPaymentStatus(ctx context.Context, ref string) (*PaymentStatusResult, error) {
-	if err := z.zalopayReady(); err != nil {
+	r, err := z.zalopayResolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.zalopayReady(); err != nil {
 		return nil, err
 	}
 	body := zalopayQueryRequest{
-		AppID:      z.zalopayAppID,
+		AppID:      r.appID,
 		AppTransID: ref,
-		Mac:        zalopayHMACHex(z.zalopayKey1, zalopayMacQueryInput(z.zalopayAppID, ref, z.zalopayKey1)),
+		Mac:        zalopayHMACHex(r.key1, zalopayMacQueryInput(r.appID, ref, r.key1)),
 	}
 	var resp zalopayQueryResponse
-	if err := zalopayPostJSON(ctx, z.zalopayHTTPClient, z.zalopayBaseURL+"/v2/query", &body, &resp); err != nil {
+	if err := zalopayPostJSON(ctx, z.zalopayClient(), r.baseURL+"/v2/query", &body, &resp); err != nil {
 		return nil, err
 	}
 	status, err := zalopayMapQueryStatus(&resp)
@@ -590,7 +655,11 @@ func zalopayQueryRaw(resp *zalopayQueryResponse) map[string]any {
 // này để kết luận giao dịch đã hoàn tiền thành công"), so the result is
 // ALWAYS StatusPending; QueryRefund carries the final state.
 func (z *ZaloPayProvider) RefundPayment(ctx context.Context, req RefundRequest) (*RefundResult, error) {
-	if err := z.zalopayReady(); err != nil {
+	r, err := z.zalopayResolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.zalopayReady(); err != nil {
 		return nil, err
 	}
 	if req.AmountMinor <= 0 {
@@ -599,24 +668,24 @@ func (z *ZaloPayProvider) RefundPayment(ctx context.Context, req RefundRequest) 
 	if strings.TrimSpace(req.TransID) == "" {
 		return nil, fmt.Errorf("zalopay: refund requires TransID (the ZaloPay zp_trans_id)")
 	}
-	now := z.zalopayNow()
+	now := z.zalopayTime()
 	desc := zalopayClip(strings.TrimSpace(req.Reason), zalopayRefundDescMaxLen)
 	if desc == "" {
 		desc = "Hoan tien"
 	}
 	body := zalopayRefundRequest{
-		AppID:       z.zalopayAppID,
-		MRefundID:   zalopayMRefundID(req.RefundID, z.zalopayAppID, now),
+		AppID:       r.appID,
+		MRefundID:   zalopayMRefundID(req.RefundID, r.appID, now),
 		ZpTransID:   req.TransID,
 		Amount:      req.AmountMinor,
 		Timestamp:   now.UnixMilli(),
 		Description: desc,
 	}
-	body.Mac = zalopayHMACHex(z.zalopayKey1,
+	body.Mac = zalopayHMACHex(r.key1,
 		zalopayMacRefundInput(body.AppID, body.ZpTransID, body.Amount, body.Description, body.Timestamp))
 
 	var resp zalopayRefundResponse
-	if err := zalopayPostJSON(ctx, z.zalopayHTTPClient, z.zalopayBaseURL+"/v2/refund", &body, &resp); err != nil {
+	if err := zalopayPostJSON(ctx, z.zalopayClient(), r.baseURL+"/v2/refund", &body, &resp); err != nil {
 		return nil, err
 	}
 	if resp.ReturnCode != zalopayReturnOK {
@@ -640,18 +709,22 @@ func (z *ZaloPayProvider) RefundPayment(ctx context.Context, req RefundRequest) 
 // RefundPayment only acknowledges the request; this is where the final
 // succeeded/failed state comes from.
 func (z *ZaloPayProvider) QueryRefund(ctx context.Context, mRefundID string) (*RefundResult, error) {
-	if err := z.zalopayReady(); err != nil {
+	r, err := z.zalopayResolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.zalopayReady(); err != nil {
 		return nil, err
 	}
 	body := zalopayQueryRefundRequest{
-		AppID:     z.zalopayAppID,
+		AppID:     r.appID,
 		MRefundID: mRefundID,
-		Timestamp: z.zalopayNow().UnixMilli(),
+		Timestamp: z.zalopayTime().UnixMilli(),
 	}
-	body.Mac = zalopayHMACHex(z.zalopayKey1, zalopayMacQueryRefundInput(body.AppID, body.MRefundID, body.Timestamp))
+	body.Mac = zalopayHMACHex(r.key1, zalopayMacQueryRefundInput(body.AppID, body.MRefundID, body.Timestamp))
 
 	var resp zalopayQueryRefundResponse
-	if err := zalopayPostJSON(ctx, z.zalopayHTTPClient, z.zalopayBaseURL+"/v2/query_refund", &body, &resp); err != nil {
+	if err := zalopayPostJSON(ctx, z.zalopayClient(), r.baseURL+"/v2/query_refund", &body, &resp); err != nil {
 		return nil, err
 	}
 	if resp.SubReturnCode == zalopaySubIDNotFound {
@@ -723,14 +796,20 @@ func zalopayParseCallbackData(data string) (*zalopayCallbackData, string, error)
 // constant-time (crypto/hmac.Equal), before any field is trusted, and
 // fails closed. type must be 1 (payment).
 func (z *ZaloPayProvider) VerifyWebhook(payload []byte) (*WebhookEvent, error) {
-	if z.zalopayCallbackKey == "" {
+	credsCtx, cancel := cfgsvcCredsCtx()
+	defer cancel()
+	r, err := z.zalopayResolve(credsCtx)
+	if err != nil {
+		return nil, err
+	}
+	if r.callbackKey == "" {
 		return nil, fmt.Errorf("zalopay: %w: callback key not configured", ErrProviderNotConfigured)
 	}
 	var env zalopayCallbackEnvelope
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrWebhookPayloadMalformed, err)
 	}
-	want := zalopayHMACHex(z.zalopayCallbackKey, env.Data)
+	want := zalopayHMACHex(r.callbackKey, env.Data)
 	if !hmac.Equal([]byte(strings.ToLower(env.Mac)), []byte(want)) {
 		return nil, ErrWebhookSignatureInvalid
 	}

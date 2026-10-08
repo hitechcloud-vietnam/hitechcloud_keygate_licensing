@@ -72,6 +72,14 @@ type GatewayCheckoutRequest struct {
 	Country    string // matched against the operator's active tax rates
 	Email      string // the buyer — required: the licence is delivered to it
 
+	// Items is the multi-item (cart) shape (plan §23): one order with
+	// N order lines and ONE gateway payment for the total. When set,
+	// PlanID is ignored and the sale is priced through the cart
+	// engine (cart_checkout.go), which resolves each line's unit
+	// price from plan_prices (§53) or the Stripe Price fallback.
+	// The single-PlanID shape above stays exactly as it was.
+	Items []CartCheckoutItem
+
 	// Attribution inputs (see attribution.go): who brought the sale.
 	// Optional, query-parameter shaped — the JSON body stays
 	// {plan_id, provider, coupon_code?, country?, email?}.
@@ -162,6 +170,12 @@ func gatewayInsertOrder(ctx context.Context, s *store.Store, o *model.Order) err
 func StartGatewayCheckout(ctx context.Context, s *store.Store, req *GatewayCheckoutRequest) (*GatewayCheckoutResult, error) {
 	if req == nil {
 		return nil, apperr.BadRequest("invalid request")
+	}
+	// Multi-item (cart) shape: the whole flow lives in
+	// cart_checkout.go — same refusals, same stamping, N priced lines
+	// on one order and one gateway payment (plan §23).
+	if len(req.Items) > 0 {
+		return cartStartGatewayCheckout(ctx, s, req)
 	}
 	provider := strings.ToLower(strings.TrimSpace(req.Provider))
 	p, err := Provider(provider)

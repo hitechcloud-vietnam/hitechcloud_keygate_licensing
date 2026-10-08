@@ -95,7 +95,9 @@ export default function LicensesPage() {
   const qc = useQueryClient()
   const [productFilter, setProductFilter] = useState<string>("")
   const [statusFilter, setStatusFilter] = useState<string>("")
-  const [search, setSearch] = useState("")
+  // ?search= pre-fills the box: global search (and the command
+  // palette) deep-link to this list narrowed to the hit they found.
+  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("search") || "")
   // Reordering reshuffles every page, so the sort state joins the
   // filters that send the pager back to page one.
   const srt = useServerSort("created_at", "desc")

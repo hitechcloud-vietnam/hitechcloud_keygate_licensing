@@ -38,6 +38,7 @@ import (
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/service"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/storage"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/store"
+	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/surface"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/internal/version"
 	"github.com/hitechcloud-vietnam/hitechcloud_keygate_licensing/pkg/response"
 )
@@ -438,15 +439,23 @@ func main() {
 	}
 	// Initialize thread-safe webhook secret with config value
 	stripeH.SetWebhookSecret(cfg.StripeWebhookSecret)
+	// Platform configuration lives in the settings table (config-in-DB):
+	// DB value > env var > catalog default. Env is bootstrap-only —
+	// see config.BootstrapEnvVars. The service caches non-secret values
+	// for 30s and drops the cache on every admin write.
+	cfgsvc := service.NewConfigService(db)
+	cfgsvc.LogEnvDeprecations(logger)
 	// Vietnamese payment gateways (plan §25 provider abstraction):
 	// one-off VND payments via Pay2S (bank transfer / Napas 247 QR),
 	// ZaloPay and payOS (VietQR). Registered unconditionally —
 	// Provider.Enabled() reports whether the credentials are actually
 	// configured, so availability always reflects real integration
-	// capability. Subscriptions stay on Stripe.
-	payment.RegisterProvider(payment.NewPay2S(cfg.Pay2S))
-	payment.RegisterProvider(payment.NewZaloPay(cfg.ZaloPay))
-	payment.RegisterProvider(payment.NewPayOS(cfg.PayOS))
+	// capability. The *Dynamic constructors read credentials from the
+	// database on every call, so an admin rotating gateway credentials
+	// takes effect without a restart. Subscriptions stay on Stripe.
+	payment.RegisterProvider(payment.NewPay2SDynamic(cfgsvc.Pay2SGetter()))
+	payment.RegisterProvider(payment.NewZaloPayDynamic(cfgsvc.ZaloPayGetter()))
+	payment.RegisterProvider(payment.NewPayOSDynamic(cfgsvc.PayOSGetter()))
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	meteredSyncer := service.NewMeteredBillingSyncer(db, logger)
 	adminH := handler.NewAdminHandler(db, webhookSvc, emailSvc, expiryChecker, meteredSyncer)
@@ -572,6 +581,13 @@ func main() {
 				db.CleanExpiredOTPs(context.Background())
 				db.CleanExpiredRefreshTokens(context.Background())
 				_, _ = db.IdempotencyPruneExpired(context.Background())
+				// Data retention (plan §92): batched, idempotent pruning
+				// of notifications / processed_events / webhook_deliveries /
+				// audit_logs per the retention.* settings. Financial
+				// records are never touched.
+				if err := service.NewRetentionJob(db, logger).Run(context.Background()); err != nil {
+					logger.Error("retention sweep failed", "error", err)
+				}
 			}
 		}
 	}()
@@ -653,33 +669,29 @@ func main() {
 		c.Next()
 	})
 
-	r.Use(func(c *gin.Context) {
-		if origin := c.GetHeader("Origin"); origin != "" {
-			if cfg.IsProduction() && origin != cfg.BaseURL {
-				if c.Request.Method == "OPTIONS" {
-					// Envelope, not an empty 403. A browser never
-					// reads a preflight body, but anything else that
-					// gets here does, and every other refusal in the
-					// API is shaped this way.
-					response.Err(c, http.StatusForbidden, "FORBIDDEN",
-						"origin not allowed")
-					c.Abort()
-					return
-				}
-				c.Next()
-				return
+	// Surface routing (the 5-domain split): settings-backed host map
+	// (domain.base derives payments./dashboard./merchant./customer./verify.
+	// + apex; per-host overrides available; optional hooks./docs./status./
+	// go./auth./cdn.). Enforcement only activates when at least one
+	// domain is configured — single-host installs and localhost dev keep
+	// today's behaviour exactly.
+	surfCfg := func() surface.Config {
+		return surface.FromSettings(func(key string) string {
+			v, err := db.GetSetting(context.Background(), key)
+			if err != nil {
+				return ""
 			}
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Authorization,Content-Type")
-			c.Header("Access-Control-Allow-Credentials", "true")
-			if c.Request.Method == "OPTIONS" {
-				c.AbortWithStatus(http.StatusNoContent)
-				return
-			}
-		}
-		c.Next()
-	})
+			return v
+		})
+	}
+	payMW := middleware.RequireSurface(surfCfg, surface.SurfacePayments)
+	dashMW := middleware.RequireSurface(surfCfg, surface.SurfaceDashboard)
+	custMW := middleware.RequireSurface(surfCfg, surface.SurfaceCustomer)
+	portMW := middleware.RequireSurface(surfCfg, surface.SurfaceCustomer, surface.SurfaceMerchant)
+	verifyMW := middleware.RequireSurface(surfCfg, surface.SurfaceVerify)
+	apexMW := middleware.RequireSurface(surfCfg, surface.SurfaceApex)
+
+	r.Use(middleware.CORS(surfCfg, cfg.BaseURL))
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
@@ -730,10 +742,13 @@ func main() {
 	v1.GET("/version", systemH.GetVersion)
 
 	setupH := handler.NewSetupHandler(db)
-	v1.GET("/setup/status", setupH.Status)
-	v1.POST("/setup/initialize", setupH.Initialize)
+	v1.GET("/setup/status", dashMW, setupH.Status)
+	v1.POST("/setup/initialize", dashMW, setupH.Initialize)
 
-	// Public site config (no auth — used by login page, branding)
+	// Public site config (no auth — used by login page, branding).
+	// Extended with the surface host map + available payment methods so
+	// the SPA can route each page to its canonical subdomain and offer
+	// only the gateways this install can actually charge through.
 	v1.GET("/config", func(c *gin.Context) {
 		settings, _ := db.GetPublicSettings(c)
 		if settings == nil {
@@ -745,8 +760,28 @@ func main() {
 		// Attribution: AGPL v3 Section 7(b) — see NOTICE
 		settings["attribution_text"] = branding.Tagline
 		settings["attribution_url"] = branding.URL
-		response.OK(c, settings)
+		out := gin.H{}
+		for k, v := range settings {
+			out[k] = v
+		}
+		out["surfaces"] = surface.PublicMap(surfCfg())
+		methods := payment.EnabledProviders()
+		names := map[string]string{
+			payment.ProviderPay2S:   "Pay2S",
+			payment.ProviderZaloPay: "ZaloPay",
+			payment.ProviderPayOS:   "payOS",
+		}
+		list := make([]gin.H, 0, len(methods))
+		for _, id := range methods {
+			list = append(list, gin.H{"id": id, "name": names[id]})
+		}
+		out["payment_methods"] = list
+		response.OK(c, out)
 	})
+
+	// The domain-map layer's own endpoint (same data, its own shape).
+	siteCfgH := handler.NewSiteConfigHandler(db, cfg.BaseURL)
+	v1.GET("/site-config", siteCfgH.Get)
 
 	// License-verification public key. SDKs fetch this once (or
 	// hardcode it after first run) to verify the offline ed25519
@@ -784,6 +819,7 @@ func main() {
 	// (a customer's backend querying license state).
 	licRateLimit := max(cfg.RateLimitAPI*2, 120)
 	lic := v1.Group("/license",
+		verifyMW,
 		middleware.LicenseBruteForceGuard(bf),
 		middleware.RateLimitByIPScoped("license", licRateLimit, time.Minute))
 	{
@@ -830,6 +866,7 @@ func main() {
 	// guessing. Live outside /license/* on purpose: this endpoint
 	// has nothing to do with the SDK identity.
 	v1.POST("/invites/accept",
+		custMW,
 		middleware.RateLimitByIPScoped("invites", 60, time.Minute),
 		authH.AcceptInvite(seatSvc))
 
@@ -866,7 +903,7 @@ func main() {
 	v1.GET("/releases/upgrade.json", feedGone)
 	v1.GET("/releases/feed", feedGone)
 
-	auth := v1.Group("/auth", middleware.RateLimitByIPScoped("auth", cfg.RateLimitAuth, time.Minute))
+	auth := v1.Group("/auth", custMW, middleware.RateLimitByIPScoped("auth", cfg.RateLimitAuth, time.Minute))
 	{
 		auth.GET("/providers", authH.Providers)
 		// Its own bucket, an order of magnitude tighter than the group:
@@ -883,6 +920,7 @@ func main() {
 	// in the group bucket that would spend the login budget an office
 	// behind one NAT address shares.
 	v1.POST("/auth/refresh",
+		custMW,
 		middleware.RateLimitByIPScoped("auth_refresh", cfg.RateLimitAuth, time.Minute),
 		authH.Refresh)
 
@@ -903,7 +941,7 @@ func main() {
 	// pages. Anonymous and read-only (no Stripe lookups), but each
 	// request runs search queries, so it gets its own rate-limit
 	// bucket like public_plans rather than sharing the API budget.
-	marketplace := v1.Group("/marketplace", middleware.RateLimitByIPScoped("marketplace", cfg.RateLimitAPI, time.Minute))
+	marketplace := v1.Group("/marketplace", verifyMW, middleware.RateLimitByIPScoped("marketplace", cfg.RateLimitAPI, time.Minute))
 	{
 		marketplace.GET("/categories", marketplaceH.ListCategories)
 		marketplace.GET("/products", marketplaceH.ListProducts)
@@ -919,6 +957,7 @@ func main() {
 	// floods are shed before any database lookup; scope gates follow
 	// auth (a key's scopes decide what it may read — fail-closed).
 	devMW := []gin.HandlerFunc{
+		verifyMW,
 		middleware.RateLimitByIPScoped("dev_api", 60, time.Minute),
 		middleware.CustomerAPIKeyAuth(db),
 	}
@@ -926,12 +965,13 @@ func main() {
 	v1.GET("/orders", append(devMW, middleware.RequireCustomerScope(handler.ScopeOrdersRead), devAPIH.ListOrders)...)
 	v1.GET("/licenses", append(devMW, middleware.RequireCustomerScope(handler.ScopeLicensesRead), devAPIH.ListLicenses)...)
 
-	v1.POST("/webhook/stripe", middleware.RateLimitByIPScoped("stripe_webhook", 60, time.Minute), stripeH.Webhook)
+	v1.POST("/webhook/stripe", payMW, middleware.RateLimitByIPScoped("stripe_webhook", 60, time.Minute), stripeH.Webhook)
 	// Stripe verify is hit by every successful checkout return, so the
 	// limit is generous, but the endpoint must NOT be naked: each call
 	// proxies to Stripe's API and an attacker could otherwise force us
 	// to burn rate-budget against Stripe.
 	v1.GET("/checkout/verify",
+		payMW,
 		middleware.RateLimitByIPScoped("checkout_verify", 60, time.Minute),
 		stripeH.VerifyCheckoutSession)
 
@@ -941,11 +981,12 @@ func main() {
 	// public_plans — each request may hit Stripe for a price and runs
 	// coupon validation (plan §742).
 	v1.POST("/checkout/quote",
+		payMW,
 		middleware.RateLimitByIPScoped("checkout_quote", cfg.RateLimitAPI, time.Minute),
 		checkoutQuoteH.Quote)
 
 	// Unified checkout: GET /pay/:checkout_id → Stripe
-	r.GET("/pay/:checkout_id", stripeH.CheckoutByPlan)
+	r.GET("/pay/:checkout_id", payMW, stripeH.CheckoutByPlan)
 
 	// Gateway checkout (plan §25): one-off VND payments through the
 	// Vietnamese gateways (Pay2S / ZaloPay / payOS). The two checkout
@@ -955,22 +996,38 @@ func main() {
 	// gateways retry aggressively (Pay2S: 5min/15min/1h/24h) and must
 	// never be locked out by a burst.
 	pgw := handler.NewPaymentGatewayHandler(db, cfg.BaseURL, emailSvc, webhookSvc)
+	// Cart checkout (plan §23): multi-item carts price server-side and
+	// check out through one Stripe session or one gateway payment.
+	// CartCheckoutHandler.GatewayPay is a drop-in superset of
+	// pgw.GatewayPay (accepts {plan_id} AND {items:[…]}), so the
+	// gateway-pay route serves both shapes from here.
+	cartH := handler.NewCartCheckoutHandler(db, cfg.BaseURL)
 	v1.GET("/checkout/gateway-pay/methods",
+		payMW,
 		middleware.RateLimitByIPScoped("gateway_pay", cfg.RateLimitAPI, time.Minute),
 		pgw.GatewayMethods)
 	v1.POST("/checkout/gateway-pay",
+		payMW,
 		middleware.RateLimitByIPScoped("gateway_pay", cfg.RateLimitAPI, time.Minute),
-		pgw.GatewayPay)
+		cartH.GatewayPay)
+	v1.POST("/checkout/cart",
+		payMW,
+		middleware.RateLimitByIPScoped("gateway_pay", cfg.RateLimitAPI, time.Minute),
+		cartH.Checkout)
 	v1.GET("/checkout/gateway-pay/status",
+		payMW,
 		middleware.RateLimitByIPScoped("gateway_pay", cfg.RateLimitAPI, time.Minute),
 		pgw.GatewayPayStatus)
 	v1.POST("/webhook/pay2s",
+		payMW,
 		middleware.RateLimitByIPScoped("gateway_ipn", 120, time.Minute),
 		pgw.WebhookPay2S)
 	v1.POST("/webhook/zalopay",
+		payMW,
 		middleware.RateLimitByIPScoped("gateway_ipn", 120, time.Minute),
 		pgw.WebhookZaloPay)
 	v1.POST("/webhook/payos",
+		payMW,
 		middleware.RateLimitByIPScoped("gateway_ipn", 120, time.Minute),
 		pgw.WebhookPayOS)
 
@@ -981,9 +1038,11 @@ func main() {
 	affiliatePublicH := handler.NewAffiliatePublicHandler(db)
 	affiliatePublicH.IPSalt = cfg.ReferralHashSalt
 	r.GET("/r/:code",
+		apexMW,
 		middleware.RateLimitByIPScoped("affiliate_redirect", 60, time.Minute),
 		affiliatePublicH.Redirect)
 	v1.POST("/affiliates/convert",
+		verifyMW,
 		middleware.RateLimitByIPScoped("affiliate_convert", 30, time.Minute),
 		affiliatePublicH.Convert)
 
@@ -993,12 +1052,15 @@ func main() {
 	// trusted from a verified assertion.
 	ssoAuthH := handler.NewSSOAuthHandler(db, cfg)
 	r.GET("/auth/sso/:id/start",
+		custMW,
 		middleware.RateLimitByIPScoped("sso_auth", cfg.RateLimitAuth, time.Minute),
 		ssoAuthH.Start)
 	r.POST("/auth/sso/saml/acs",
+		custMW,
 		middleware.RateLimitByIPScoped("sso_auth", cfg.RateLimitAuth, time.Minute),
 		ssoAuthH.ACS)
 	r.GET("/auth/sso/oidc/callback",
+		custMW,
 		middleware.RateLimitByIPScoped("sso_auth", cfg.RateLimitAuth, time.Minute),
 		ssoAuthH.Callback)
 
@@ -1006,7 +1068,7 @@ func main() {
 	// and its own auth (htc_scim_ bearer tokens). The middleware answers
 	// identical 401s for missing/unknown/revoked tokens.
 	scimH := handler.NewSCIMHandler(db, cfg.BaseURL)
-	scim := r.Group("/scim/v2", middleware.SCIMTokenAuth(db))
+	scim := r.Group("/scim/v2", verifyMW, middleware.SCIMTokenAuth(db))
 	scim.GET("/Users", scimH.ListUsers)
 	scim.POST("/Users", scimH.CreateUser)
 	scim.GET("/Users/:id", scimH.GetUser)
@@ -1014,7 +1076,11 @@ func main() {
 	scim.PATCH("/Users/:id", scimH.PatchUser)
 	scim.DELETE("/Users/:id", scimH.DeleteUser)
 
-	portal := v1.Group("/portal", middleware.SessionAuth(cfg.JWTSecret, db.FindUserIsAdmin))
+	// The portal tree serves BOTH the customer surface and the merchant
+	// surface (merchant.example.com hosts the reseller/affiliate portal,
+	// which lives under /portal/reseller + /portal/affiliate). Session
+	// auth + per-route permissions are unchanged.
+	portal := v1.Group("/portal", portMW, middleware.SessionAuth(cfg.JWTSecret, db.FindUserIsAdmin))
 	{
 		portal.GET("/me", authH.Me)
 		portal.GET("/licenses", func(c *gin.Context) {
@@ -1349,6 +1415,7 @@ func main() {
 	// concern, and a leaked CI key shouldn't be able to swap the
 	// product's release-signing identity.
 	baseAdminMW := []gin.HandlerFunc{
+		dashMW,
 		middleware.SessionOrAPIKey(cfg.JWTSecret, db, db.FindUserIsAdmin),
 		middleware.RateLimitByIPScoped("admin", cfg.RateLimitAdmin, time.Minute),
 	}
@@ -1375,6 +1442,35 @@ func main() {
 		reports.GET("", reportsAdminH.List)
 		reports.GET("/:type", reportsAdminH.Get)
 		reports.GET("/:type/export", reportsAdminH.Export)
+
+		// Config-in-DB (plan §67 evolution): platform configuration lives
+		// in the settings table; env is bootstrap-only. Secrets are sealed
+		// at rest and never returned by the API.
+		cfgAdmin := handler.NewConfigAdminHandler(db, cfgsvc)
+		admin.GET("/config", middleware.RequirePermission(model.PermSettingsManage, db), cfgAdmin.GetConfig)
+		admin.PUT("/config", middleware.RequirePermission(model.PermSettingsManage, db), cfgAdmin.UpdateConfig)
+		admin.PATCH("/config", middleware.RequirePermission(model.PermSettingsManage, db), cfgAdmin.UpdateConfig)
+		admin.DELETE("/config/:key", middleware.RequirePermission(model.PermSettingsManage, db), cfgAdmin.DeleteConfig)
+		admin.POST("/config/:key/reset", middleware.RequirePermission(model.PermSettingsManage, db), cfgAdmin.ResetConfigKey)
+
+		// Global search (plan §86) — powers the Cmd/Ctrl+K palette.
+		adminSearch := handler.NewAdminSearchHandler(db)
+		admin.GET("/search", adminSearch.Search)
+
+		// Refunds (plan §79): full + partial + manual, idempotent.
+		refundsAdmin := handler.NewRefundsAdminHandler(db)
+		admin.POST("/orders/:id/refund", middleware.RequirePermission(model.PermOrdersRefund, db), refundsAdmin.Refund)
+		admin.GET("/orders/:id/refunds", middleware.RequirePermission(model.PermOrdersRefund, db), refundsAdmin.ListRefunds)
+
+		// MRR/ARR metrics (plan §42).
+		metricsAdmin := handler.NewAdminMetricsHandler(db)
+		admin.GET("/metrics/mrr", middleware.RequirePermission(model.PermReportsRead, db), metricsAdmin.MRR)
+		admin.GET("/metrics/mrr-series", middleware.RequirePermission(model.PermReportsRead, db), metricsAdmin.Series)
+
+		// Data retention (plan §92): on-demand sweep in addition to the
+		// hourly job wired above.
+		retentionAdmin := handler.NewRetentionAdminHandler(db)
+		admin.POST("/retention/run", middleware.RequirePermission(model.PermSettingsManage, db), retentionAdmin.Run)
 
 		// Per-route permission gates (plan §8 rollout): each route names
 		// the granular permission that authorizes it. Admission is still

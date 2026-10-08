@@ -388,6 +388,18 @@ type License struct {
 	// operator lifts, or SuspendedByStripe (a paused subscription), which
 	// Stripe lifts by resuming it. Empty when not suspended.
 	SuspendedBy string `bun:",nullzero" json:"suspended_by,omitempty"`
+	// ── Revocation provenance (plan §80, additive) ──
+	// Why the licence was revoked, who did it, and when. RevokeReason
+	// is one of RevokeReasons() (validated on write; callers fold an
+	// empty reason to DefaultRevokeReason), RevokedBy the actor (admin
+	// user id or system actor), RevokedAt the stamp. All three are
+	// NULL on a licence revoked before these columns existed and on
+	// every licence that was never revoked — they never replace
+	// Status, which stays the authority on whether the licence is
+	// dead.
+	RevokeReason string     `bun:",nullzero" json:"revoke_reason,omitempty"`
+	RevokedBy    string     `bun:",nullzero" json:"revoked_by,omitempty"`
+	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 	// PastDueAt anchors the dunning-email ladder. Set by the
 	// payment-failed handler when the license first enters past_due;
 	// cleared on recovery / cancellation. Reading lic.UpdatedAt as
