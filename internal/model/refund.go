@@ -70,7 +70,7 @@ type Refund struct {
 
 	// ID is the BIGSERIAL row id — the model keeps int64 (like
 	// GatewayPayment) because the ledger's own ids stay uuid TEXT.
-	ID      int64  `bun:",pk" json:"id"`
+	ID      int64  `bun:",pk,autoincrement" json:"id"`
 	OrderID string `bun:",notnull" json:"order_id"`
 	// PaymentProvider is one of the RefundProvider* values.
 	PaymentProvider string `bun:",notnull,default:''" json:"payment_provider"`

@@ -34,7 +34,7 @@ import (
 type PlanPrice struct {
 	bun.BaseModel `bun:"table:plan_prices"`
 
-	ID            int64     `bun:",pk" json:"id"`
+	ID            int64     `bun:",pk,autoincrement" json:"id"`
 	PlanID        string    `bun:",notnull" json:"plan_id"`
 	Currency      string    `bun:",notnull" json:"currency"`
 	AmountMinor   int64     `bun:",notnull" json:"amount_minor"`
@@ -76,8 +76,10 @@ func curFoldCurrency(raw string) string {
 //   - the plan must exist (ErrPlanPricePlanNotFound) and the currency
 //     must be a shaped ISO code (curValidCurrency).
 //
-// The model's ID is the BIGSERIAL row id; a caller leaves it zero on
-// create and the upsert ignores it (the conflict target decides).
+// The model's ID is the BIGSERIAL row id; `autoincrement` keeps bun
+// from sending an explicit zero on insert (which would pin every row
+// to id 0 and collide on the second one), and the conflict target
+// decides the upsert semantics.
 func (s *Store) SetPlanPrice(ctx context.Context, p *PlanPrice) error {
 	if p == nil {
 		return errors.New("plan price is required")

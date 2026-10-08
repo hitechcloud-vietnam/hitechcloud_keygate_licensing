@@ -28,7 +28,7 @@ import (
 type GatewayPayment struct {
 	bun.BaseModel `bun:"table:gateway_payments"`
 
-	ID          int64          `bun:",pk" json:"id"`
+	ID          int64          `bun:",pk,autoincrement" json:"id"`
 	OrderID     string         `bun:",notnull" json:"order_id"`
 	Provider    string         `bun:",notnull" json:"provider"`
 	ProviderRef string         `bun:",notnull" json:"provider_ref"`

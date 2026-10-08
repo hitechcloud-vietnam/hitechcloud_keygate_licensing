@@ -60,7 +60,7 @@ func (s *Store) CreateRefund(ctx context.Context, r *model.Refund) error {
 	if r == nil {
 		return errors.New("refund is required")
 	}
-	_, err := s.DB.NewInsert().Model(r).Exec(ctx)
+	_, err := s.DB.NewInsert().Model(r).Returning("id").Exec(ctx)
 	return err
 }
 
